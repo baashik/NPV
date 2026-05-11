@@ -1,18 +1,31 @@
-FROM python:3.9-slim
+# ── Base Image ────────────────────────────────────────────────────────────────
+FROM python:3.11-slim
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    && rm -rf /var/lib/apt/lists/*
-
+# HuggingFace Spaces expects a non-root user called "user"
 RUN useradd -m -u 1000 user
 USER user
 
-ENV PATH="/home/user/.local/bin:$PATH"
-WORKDIR /app
+ENV HOME=/home/user \
+    PATH=/home/user/.local/bin:$PATH \
+    PYTHONUNBUFFERED=1 \
+    PORT=7860
 
+WORKDIR $HOME/app
+
+# ── Dependencies ──────────────────────────────────────────────────────────────
 COPY --chown=user requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt
 
-COPY --chown=user . /app
+# ── Application ───────────────────────────────────────────────────────────────
+COPY --chown=user . .
 
-CMD ["python", "app.py"]
+# ── Expose & Launch ───────────────────────────────────────────────────────────
+EXPOSE 7860
+
+# Use gunicorn for production; fall back to dev server if gunicorn not available
+CMD gunicorn app:server \
+      --bind 0.0.0.0:7860 \
+      --workers 2 \
+      --timeout 120 \
+      --log-level info
