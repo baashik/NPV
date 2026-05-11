@@ -4,11 +4,9 @@ import plotly.express as px
 from dash import Dash, html, dcc, Input, Output, State, callback
 import dash_ag_grid as dag
 
-# 1. Initialize
 app = Dash(__name__)
-server = app.server # This is the "hook" for Hugging Face
+server = app.server
 
-# 2. Layout
 app.layout = html.Div([
     html.H1("Biotech NPV Engine"),
     dag.AgGrid(
@@ -20,7 +18,6 @@ app.layout = html.Div([
     dcc.Graph(id="graph")
 ])
 
-# 3. Logic
 @callback(
     Output("graph", "figure"),
     Input("run-btn", "n_clicks"),
@@ -28,10 +25,13 @@ app.layout = html.Div([
     prevent_initial_call=True
 )
 def update(n, rows):
-    costs = [float(r['Cost']) for r in rows]
+    costs = [float(r["Cost"]) for r in rows]
     total_cost = sum(costs)
-    # 50/50 chance of success logic
-    res = [np.random.normal(600, 100) - total_cost if np.random.rand() > 0.5 else -total_cost for _ in range(1000)]
+    res = [
+        np.random.normal(600, 100) - total_cost
+        if np.random.rand() > 0.5 else -total_cost
+        for _ in range(1000)
+    ]
     return px.histogram(res, title="Monte Carlo Results")
 
 if __name__ == "__main__":
