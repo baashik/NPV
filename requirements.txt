@@ -1,6 +1,3 @@
-dash
-dash-ag-grid
-pandas
-numpy
-plotly
-gunicorn
+fastapi
+uvicorn[standard]
+
