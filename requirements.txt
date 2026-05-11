@@ -1,3 +1,5 @@
-fastapi
-uvicorn[standard]
 pandas
+numpy
+plotly
+dash
+dash-ag-grid
