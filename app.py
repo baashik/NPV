@@ -274,7 +274,7 @@ def mc_stats(arr):
         "std": np.std(arr),
         "min": np.min(arr),
         "p5": pct[0],
-        "p10": pct [github](https://github.com/baashik/NPV/blob/main/app.py),
+        "p10": pct[1],
         "p25": pct[2],
         "p50": pct[3],
         "p75": pct[4],
@@ -283,7 +283,6 @@ def mc_stats(arr):
         "max": np.max(arr),
         "prob_pos": prob_pos,
     }
-
 
 # ============================================================================
 # SECTION 4 — DASH APP LAYOUT
