@@ -1,242 +1,765 @@
+"""
+GATX-11 Biopharma Licensing NPV Dashboard
+Licensor (Biotech) ↔ Licensee (Pharma Partner) | EU Exclusive License
+"""
+
 import numpy as np
 import pandas as pd
 import warnings
 import os
 
-from dash import Dash, dcc, html, Input, Output, State, no_update
+from dash import Dash, dcc, html, Input, Output, State, no_update, dash_table
 import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
+import plotly.express as px
+from plotly.subplots import make_subplots
 
 warnings.filterwarnings("ignore")
-np.random.seed(42)
 
 # ============================================================================
-# SECTION 1 — CONSTANTS & ASSUMPTIONS
+# SECTION 1 — CONSTANTS & DEFAULTS
 # ============================================================================
 
 START_YEAR = 2026
-END_YEAR = 2042
-YEARS = list(range(START_YEAR, END_YEAR + 1))
-N_YEARS = len(YEARS)
+END_YEAR   = 2042
+YEARS      = list(range(START_YEAR, END_YEAR + 1))
+N_YEARS    = len(YEARS)
 
-# Default Assumptions
-EU_POP_DEFAULT = 450.0
-POP_GROWTH_MEAN = 0.002 # 0.2%
-POP_GROWTH_SD = 0.005
-TARGET_SHARE = 0.09
-DIAGNOSIS_RATE = 0.80
-TREATMENT_RATE = 0.50
-PEAK_PEN_MEAN = 0.05
-PRICE_MEAN = 15000.0  # Annual per patient
-COGS_PCT = 0.12
-TAX_RATE = 0.21
+ADOPTION_SCHEDULE = {
+    0: 0.00, 1: 0.00, 2: 0.00, 3: 0.00, 4: 0.00, 5: 0.00, 6: 0.00,
+    7: 0.60, 8: 0.80, 9: 0.90, 10: 1.00, 11: 1.00, 12: 1.00,
+    13: 0.70, 14: 0.40, 15: 0.20, 16: 0.20,
+}
 
-# Risk/Discount Defaults
-LIC_WACC_MEAN = 0.10
-LICOR_WACC_MEAN = 0.14
+RD_SCHEDULE = {0: 2.0, 1: 3.0, 2: 2.0, 3: 3.0, 4: 3.0, 5: 3.0, 6: 2.0}
 
-# Probability of Technical Success (PTRS) per Phase
-# Source: Clinical Development Success Rates 2006-2015 (BIO/Biomedtracker)
-PHASE_PTRS = {
-    "Ph1_to_Ph2": 0.63,
-    "Ph2_to_Ph3": 0.30,
-    "Ph3_to_NDA": 0.58,
-    "NDA_to_App": 0.90
+ROYALTY_TIERS_DEFAULT = [(0, 100, 0.050), (100, 200, 0.070), (200, float("inf"), 0.090)]
+
+COLORS = {
+    "blue":   "#1565C0",
+    "teal":   "#00838F",
+    "amber":  "#F57F17",
+    "red":    "#C62828",
+    "green":  "#2E7D32",
+    "grey":   "#546E7A",
+    "lgrey":  "#ECEFF1",
+    "bg":     "#F8F9FA",
+    "card":   "#FFFFFF",
 }
 
 # ============================================================================
 # SECTION 2 — CORE ENGINE
 # ============================================================================
 
-def run_scenario(pg, pp, pr, lsw, lrw, params):
-    """Calculates a single NPV scenario with depletable LCF."""
-    rev = np.zeros(N_YEARS)
-    ptr_success = np.zeros(N_YEARS)
-    
-    # 1. PTRS Mapping (Assuming Launch in Year 7)
-    # Binary logic: Failures in early years halt all subsequent cash flows
-    cum_p = 1.0
-    p_schedule = [1.0]*2 + [params['p1']] + [1.0]*2 + [params['p2']] + [params['p3']] + [params['p4']]
-    for i in range(N_YEARS):
-        if i < len(p_schedule):
-            cum_p *= p_schedule[i]
-        ptr_success[i] = cum_p
+def compute_royalty(rev_m, tiers):
+    roy = 0.0
+    for lo, hi, rate in tiers:
+        if rev_m > lo:
+            roy += min(rev_m - lo, hi - lo) * rate
+    return roy
 
-    # 2. Revenue Calculation
-    pop = params['eu_pop']
+
+def run_scenario(pg, pp, pr, lsw, lrw, params):
+    """
+    Single-scenario NPV engine.
+    Returns full annual arrays + scalar NPV metrics.
+    """
+    p_sched = [1.0, params["p1"], 1.0, params["p2"], 1.0, params["p3"], params["p4"]]
+    cum_p = 1.0
+    ptr = np.zeros(N_YEARS)
+    for i in range(N_YEARS):
+        if i < len(p_sched):
+            cum_p *= p_sched[i]
+        ptr[i] = cum_p
+
+    # Revenue
+    rev = np.zeros(N_YEARS)
+    pop = params["eu_pop"]
     for i in range(N_YEARS):
         pop *= (1 + pg)
-        # Adoption curve logic: Peak * Adoption_Idx
-        adopt = params['adopt'].get(i, 0.0)
-        treated = pop * params['ts'] * params['dr'] * params['tr'] * (pp * adopt)
-        rev[i] = treated * pr
+        adopt = ADOPTION_SCHEDULE.get(i, 0.0)
+        treated = pop * params["ts"] * params["dr"] * params["tr"] * (pp * adopt)
+        rev[i] = max(treated * pr, 0.0)
 
-    # 3. Financials & Tax Shield
-    fcf = np.zeros(N_YEARS)
+    # FCF with depletable LCF
+    fcf     = np.zeros(N_YEARS)
     royalty = np.zeros(N_YEARS)
+    cogs_arr= np.zeros(N_YEARS)
+    ebitda_arr = np.zeros(N_YEARS)
     lcf_balance = 0.0
-    
+
     for i in range(N_YEARS):
-        r = rev[i]
-        costs = (r * params['cogs']) + (r * params['ga']) + params['rd'].get(i, 0.0)
-        ebitda = r - costs
-        
-        # Calculate Royalty
-        roy = 0.0
-        for lo, hi, rate in params['tiers']:
-            if r > lo:
-                roy += min(r - lo, hi - lo) * rate
+        r    = rev[i]
+        cogs = r * params["cogs"]
+        ga   = r * params["ga"]
+        rd   = params["rd"].get(i, 0.0)
+        ebitda = r - cogs - ga - rd
+        ebitda_arr[i] = ebitda
+        cogs_arr[i]   = cogs
+
+        roy = compute_royalty(r, params["tiers"])
         royalty[i] = roy
-        
-        # Depletable Tax Loss Carryforward logic
+
         pre_tax = ebitda - roy
         if pre_tax < 0:
             lcf_balance += abs(pre_tax)
             tax = 0.0
         else:
-            taxable = max(pre_tax - lcf_balance, 0)
-            lcf_balance = max(lcf_balance - pre_tax, 0)
-            tax = taxable * params['tax']
-            
+            taxable     = max(pre_tax - lcf_balance, 0.0)
+            lcf_balance = max(lcf_balance - pre_tax, 0.0)
+            tax         = taxable * params["tax"]
+
         fcf[i] = pre_tax - tax
 
-    # 4. Risk Adjustment (eNPV)
-    risk_adj_fcf = fcf * ptr_success
-    licensor_cf = (royalty * ptr_success) + (params['milestones'].get(i, 0.0) * ptr_success)
-    if 0 in params['milestones']: licensor_cf[0] += params['upfront'] # Upfront non-risked
+    # Risk-adjust
+    risk_adj_fcf = fcf * ptr
 
-    # 5. Discounting
-    df_licensee = np.array([(1 / (1 + lsw)) ** i for i in range(N_YEARS)])
-    df_licensor = np.array([(1 / (1 + lrw)) ** i for i in range(N_YEARS)])
+    # Licensor cash flows
+    licensor_cf = royalty * ptr
+    licensor_cf[0] += params["upfront"]
+    for yr_idx, mil_m in params["milestones"].items():
+        if 0 < yr_idx < N_YEARS:
+            licensor_cf[yr_idx] += mil_m * ptr[yr_idx]
+
+    # Discount
+    df_ls = np.array([(1 / (1 + lsw)) ** i for i in range(N_YEARS)])
+    df_lr = np.array([(1 / (1 + lrw)) ** i for i in range(N_YEARS)])
 
     return {
-        "rev": rev,
-        "fcf": fcf,
-        "risk_adj_fcf": risk_adj_fcf,
-        "licensor_cf": licensor_cf,
-        "licensee_enpv": np.sum(risk_adj_fcf * df_licensee),
-        "licensor_npv": np.sum(licensor_cf * df_licensor),
-        "ptr_success": ptr_success
+        "rev":            rev,
+        "cogs":           cogs_arr,
+        "ebitda":         ebitda_arr,
+        "royalty":        royalty,
+        "fcf":            fcf,
+        "risk_adj_fcf":   risk_adj_fcf,
+        "licensor_cf":    licensor_cf,
+        "ptr":            ptr,
+        "df_ls":          df_ls,
+        "licensee_enpv":  float(np.sum(risk_adj_fcf * df_ls)),
+        "licensor_npv":   float(np.sum(licensor_cf  * df_lr)),
     }
 
+
+def run_montecarlo(n_sims, params, price):
+    rng = np.random.default_rng(42)
+    ls_npvs, lr_npvs = [], []
+
+    for _ in range(n_sims):
+        pg  = float(np.clip(rng.normal(0.002,  0.010), -0.05, 0.05))
+        pp  = float(np.clip(rng.normal(0.05,   0.015),  0.005, 0.20))
+        pr  = float(max(rng.normal(price, price * 0.15), 5.0))
+        lsw = float(np.clip(rng.normal(0.10,   0.025),  0.04, 0.25))
+        lrw = float(np.clip(rng.normal(0.14,   0.025),  0.04, 0.30))
+
+        res = run_scenario(pg, pp, pr, lsw, lrw, params)
+        ls_npvs.append(res["licensee_enpv"])
+        lr_npvs.append(res["licensor_npv"])
+
+    return np.array(ls_npvs), np.array(lr_npvs)
+
+
+def npv_stats(arr):
+    p = np.percentile(arr, [5, 10, 25, 50, 75, 90, 95])
+    return {
+        "mean":     float(np.mean(arr)),
+        "std":      float(np.std(arr)),
+        "min":      float(np.min(arr)),
+        "p5":  p[0], "p10": p[1], "p25": p[2], "p50": p[3],
+        "p75": p[4], "p90": p[5], "p95": p[6],
+        "max":      float(np.max(arr)),
+        "prob_pos": float(np.mean(arr > 0)),
+    }
+
+
+def build_dcf_table(base):
+    """Returns a list-of-dicts for a horizontal (years as rows) DCF table."""
+    rd_arr = np.array([RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)])
+    disc_fcf = base["risk_adj_fcf"] * base["df_ls"]
+    rows = []
+    for i, yr in enumerate(YEARS):
+        rows.append({
+            "Year":                str(yr),
+            "Revenue ($M)":        f"{base['rev'][i]:,.2f}",
+            "COGS ($M)":           f"{base['cogs'][i]:,.2f}",
+            "R&D ($M)":            f"{rd_arr[i]:,.2f}",
+            "EBITDA ($M)":         f"{base['ebitda'][i]:,.2f}",
+            "Royalty ($M)":        f"{base['royalty'][i]:,.2f}",
+            "FCF ($M)":            f"{base['fcf'][i]:,.2f}",
+            "Cum. P(Success)":     f"{base['ptr'][i]*100:.1f}%",
+            "Risk-Adj FCF ($M)":   f"{base['risk_adj_fcf'][i]:,.2f}",
+            "Discount Factor":     f"{base['df_ls'][i]:.4f}",
+            "Disc. eNPV ($M)":     f"{disc_fcf[i]:,.2f}",
+        })
+    return rows
+
+
 # ============================================================================
-# SECTION 3 — MONTE CARLO & DASH LAYOUT
+# SECTION 3 — LAYOUT HELPERS
 # ============================================================================
 
-app = Dash(__name__, external_stylesheets=[dbc.themes.FLATLY])
+def kpi_card(title, value, color="#1565C0", sub=None):
+    children = [
+        html.P(title, style={"fontSize": "0.75rem", "color": "#888", "marginBottom": "2px", "fontWeight": "600", "letterSpacing": "0.05em"}),
+        html.H4(value, style={"color": color, "marginBottom": "0", "fontWeight": "700"}),
+    ]
+    if sub:
+        children.append(html.Small(sub, style={"color": "#666"}))
+    return dbc.Card(dbc.CardBody(children, style={"padding": "12px 16px"}),
+                    style={"borderLeft": f"4px solid {color}", "borderRadius": "8px"})
+
+
+def section_header(title, icon="📊"):
+    return html.Div([
+        html.Span(icon, style={"marginRight": "8px", "fontSize": "1.1rem"}),
+        html.Span(title, style={"fontWeight": "700", "fontSize": "1.05rem", "color": "#1a1a2e"}),
+    ], style={"borderBottom": "2px solid #e9ecef", "paddingBottom": "8px", "marginBottom": "16px"})
+
+
+# ============================================================================
+# SECTION 4 — APP LAYOUT
+# ============================================================================
+
+app = Dash(
+    __name__,
+    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.BOOTSTRAP],
+    title="GATX-11 Licensing NPV",
+    meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
+)
 server = app.server
 
-app.layout = dbc.Container([
-    html.H1("High-Rigor Biopharma Licensing Engine", className="mt-4"),
-    html.Hr(),
+SIDEBAR = dbc.Card([
+    html.Div([
+        html.H5("⚙️ Assumptions", style={"fontWeight": "700", "color": "#1a1a2e"}),
+        html.Hr(style={"margin": "8px 0"}),
+    ]),
+
+    # ── Commercial ────────────────────────────────────────────────────────────
+    html.P("COMMERCIAL", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "12px 0 6px"}),
+    dbc.Label("EU Population (M)", style={"fontSize": "0.82rem"}),
+    dbc.Input(id="in-pop",   value=450.0,    type="number", min=100,   max=1000, step=10,   size="sm"),
+    dbc.Label("Price / Patient ($)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-price", value=15000.0,  type="number", min=1000,  step=500, size="sm"),
+    dbc.Label("Peak Penetration (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-pen",   value=5.0,      type="number", min=0.5,   max=30,   step=0.5,  size="sm"),
+    dbc.Label("COGS (% of Rev)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-cogs",  value=12.0,     type="number", min=1,     max=50,   step=1,    size="sm"),
+    dbc.Label("Tax Rate (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-tax",   value=21.0,     type="number", min=0,     max=50,   step=1,    size="sm"),
+
+    # ── Discount Rates ────────────────────────────────────────────────────────
+    html.P("DISCOUNT RATES", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
+    dbc.Label("Licensee WACC (%)", style={"fontSize": "0.82rem"}),
+    dbc.Input(id="in-lsw",  value=10.0,  type="number", min=3, max=30, step=0.5, size="sm"),
+    dbc.Label("Licensor WACC (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-lrw",  value=14.0,  type="number", min=3, max=30, step=0.5, size="sm"),
+
+    # ── PTRS ──────────────────────────────────────────────────────────────────
+    html.P("CLINICAL SUCCESS (PTRS %)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
+    dbc.Label("Ph1 → Ph2", style={"fontSize": "0.82rem"}),
+    dbc.Input(id="p1", value=63.0, type="number", min=1, max=100, step=1, size="sm"),
+    dbc.Label("Ph2 → Ph3", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="p2", value=30.0, type="number", min=1, max=100, step=1, size="sm"),
+    dbc.Label("Ph3 → NDA", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="p3", value=58.0, type="number", min=1, max=100, step=1, size="sm"),
+    dbc.Label("NDA → Approval", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="p4", value=90.0, type="number", min=1, max=100, step=1, size="sm"),
+
+    # ── Deal Terms ────────────────────────────────────────────────────────────
+    html.P("DEAL TERMS ($M)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
+    dbc.Label("Upfront Payment ($M)", style={"fontSize": "0.82rem"}),
+    dbc.Input(id="in-upfront", value=2.0, type="number", min=0, step=0.5, size="sm"),
+    dbc.Label("Ph1/Ph2/Ph3 Milestone ($M each)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+    dbc.Input(id="in-mil", value=1.0, type="number", min=0, step=0.5, size="sm"),
+
+    html.Hr(style={"margin": "16px 0 10px"}),
+    dbc.Label("Simulations", style={"fontSize": "0.82rem"}),
+    dcc.Slider(id="sl-sims", min=1000, max=10000, step=1000, value=5000,
+               marks={1000: "1K", 5000: "5K", 10000: "10K"},
+               tooltip={"placement": "bottom"}),
+    html.Br(),
+    dbc.Button([html.I(className="bi bi-play-circle me-2"), "Run Simulation"],
+               id="btn-run", color="primary", size="md", className="w-100 mt-2"),
+    html.Div(id="run-status", style={"fontSize": "0.78rem", "color": "#555", "marginTop": "8px"}),
+
+], body=True, style={"position": "sticky", "top": "10px", "overflowY": "auto", "maxHeight": "96vh", "borderRadius": "10px"})
+
+
+MAIN = html.Div([
+    # ── KPI Row ────────────────────────────────────────────────────────────────
+    dbc.Row([
+        dbc.Col(html.Div(id="kpi-ls-mean"),  md=3),
+        dbc.Col(html.Div(id="kpi-ls-prob"),  md=3),
+        dbc.Col(html.Div(id="kpi-lr-mean"),  md=3),
+        dbc.Col(html.Div(id="kpi-lr-prob"),  md=3),
+    ], className="mb-3 g-2"),
+
+    # ── Tabs ──────────────────────────────────────────────────────────────────
     dbc.Tabs([
-        dbc.Tab(label="1. Input Assumptions", tab_id="tab-inputs"),
-        dbc.Tab(label="2. Expected Cash Flows", tab_id="tab-dcf"),
-        dbc.Tab(label="3. Risk Analysis", tab_id="tab-risk"),
-    ], id="tabs", active_tab="tab-inputs"),
-    html.Div(id="content", className="p-4"),
-    dcc.Store(id="store-results")
-], fluid=True)
+        dbc.Tab(label="📈 Revenue & Cash Flows", tab_id="t-cf"),
+        dbc.Tab(label="🎲 Monte Carlo",          tab_id="t-mc"),
+        dbc.Tab(label="📊 DCF Table",            tab_id="t-dcf"),
+        dbc.Tab(label="🌪️ Tornado / Sensitivity",tab_id="t-sens"),
+        dbc.Tab(label="🏦 Licensor Bridge",      tab_id="t-bridge"),
+    ], id="main-tabs", active_tab="t-cf", className="mb-3"),
 
-@app.callback(Output("content", "children"), [Input("tabs", "active_tab")])
-def render_tab(tab):
-    if tab == "tab-inputs":
-        return dbc.Row([
-            dbc.Col([
-                html.H5("Commercial Inputs"),
-                dbc.Label("EU Pop (M)"), dbc.Input(id="in-pop", value=EU_POP_DEFAULT, type="number"),
-                dbc.Label("Price ($)"), dbc.Input(id="in-price", value=PRICE_MEAN, type="number"),
-                dbc.Label("Tax Rate"), dbc.Input(id="in-tax", value=TAX_RATE, type="number"),
-            ], md=4),
-            dbc.Col([
-                html.H5("Clinical Probabilities (PTRS)"),
-                dbc.Label("Ph2 Success"), dbc.Input(id="p1", value=PHASE_PTRS["Ph1_to_Ph2"], type="number"),
-                dbc.Label("Ph3 Success"), dbc.Input(id="p2", value=PHASE_PTRS["Ph2_to_Ph3"], type="number"),
-                dbc.Label("Launch Success"), dbc.Input(id="p3", value=PHASE_PTRS["NDA_to_App"], type="number"),
-            ], md=4),
-            dbc.Col([
-                html.H5("Execution"),
-                dbc.Button("Run Monte Carlo (10k)", id="btn-run", color="primary", size="lg", className="w-100"),
-                html.Div(id="run-status", className="mt-3")
-            ], md=4)
-        ])
-    elif tab == "tab-dcf":
-        return html.Div([dcc.Graph(id="graph-fcf"), html.Div(id="table-dcf")])
-    return html.Div([
-        dbc.Row([
-            dbc.Col(dcc.Graph(id="hist-licensee"), md=6),
-            dbc.Col(dcc.Graph(id="hist-licensor"), md=6),
-        ])
-    ])
+    html.Div(id="main-content"),
+], style={"padding": "0 8px"})
 
-@app.callback(
-    [Output("store-results", "data"), Output("run-status", "children")],
-    [Input("btn-run", "n_clicks")],
-    [State("in-pop", "value"), State("in-price", "value"), State("in-tax", "value")]
-)
-def run_simulation(n, pop, price, tax):
-    if not n: return no_update
-    
-    # Constant params for this run
-    params = {
-        'eu_pop': pop, 'ts': 0.09, 'dr': 0.8, 'tr': 0.5, 'cogs': 0.12, 'ga': 0.01,
-        'tax': tax, 'upfront': 5.0, 'p1': 0.63, 'p2': 0.30, 'p3': 0.58, 'p4': 0.90,
-        'adopt': {7:0.2, 8:0.5, 9:0.8, 10:1.0, 11:1.0},
-        'rd': {0:2.0, 1:2.0, 2:5.0, 3:5.0},
-        'milestones': {4: 10.0, 7: 20.0},
-        'tiers': [(0, 100, 0.05), (100, 500, 0.10), (500, np.inf, 0.15)]
+
+app.layout = dbc.Container([
+    # ── Header ────────────────────────────────────────────────────────────────
+    dbc.Row([
+        dbc.Col([
+            html.H3("🧬 GATX-11 Biopharma Licensing — NPV Dashboard",
+                    style={"fontWeight": "800", "color": "#1a1a2e", "marginBottom": "2px"}),
+            html.Small("Fibrosis · Phase I · EU Exclusive License  |  Licensor ↔ Licensee Monte Carlo Simulation",
+                       style={"color": "#666"}),
+        ], md=9),
+        dbc.Col([
+            html.Div("Powered by Monte Carlo + PRTS Risk Adjustment",
+                     style={"textAlign": "right", "color": "#888", "fontSize": "0.78rem", "paddingTop": "18px"}),
+        ], md=3),
+    ], className="py-3 mb-2", style={"borderBottom": "3px solid #1565C0"}),
+
+    dcc.Store(id="store-results"),
+
+    dbc.Row([
+        dbc.Col(SIDEBAR, md=3),
+        dbc.Col(MAIN,    md=9),
+    ], className="mt-3"),
+
+], fluid=True, style={"backgroundColor": COLORS["bg"], "minHeight": "100vh"})
+
+
+# ============================================================================
+# SECTION 5 — CALLBACKS
+# ============================================================================
+
+def build_params(pop, price, pen, cogs, tax, lsw, lrw, p1, p2, p3, p4, upfront, mil):
+    return {
+        "eu_pop":     float(pop or 450),
+        "ts":         0.09,
+        "dr":         0.80,
+        "tr":         0.50,
+        "cogs":       float(cogs or 12) / 100,
+        "ga":         0.01,
+        "tax":        float(tax or 21) / 100,
+        "upfront":    float(upfront or 2),
+        "p1":         float(p1 or 63) / 100,
+        "p2":         float(p2 or 30) / 100,
+        "p3":         float(p3 or 58) / 100,
+        "p4":         float(p4 or 90) / 100,
+        "rd":         RD_SCHEDULE,
+        "milestones": {2: float(mil or 1), 4: float(mil or 1), 6: float(mil or 1)},
+        "tiers":      ROYALTY_TIERS_DEFAULT,
     }
 
-    n_sims = 5000 # Adjusted for browser performance
-    ls_npvs = []
-    lr_npvs = []
-    
-    for _ in range(n_sims):
-        # Sample Stochastic Variables
-        pg = np.clip(np.random.normal(0.002, 0.01), -0.05, 0.05)
-        pp = np.clip(np.random.normal(0.05, 0.015), 0.01, 0.20)
-        pr = np.random.normal(price, price * 0.1)
-        lsw = np.clip(np.random.normal(0.10, 0.02), 0.05, 0.20)
-        lrw = np.clip(np.random.normal(0.14, 0.02), 0.05, 0.25)
-        
-        res = run_scenario(pg, pp, pr, lsw, lrw, params)
-        ls_npvs.append(res['licensee_enpv'])
-        lr_npvs.append(res['licensor_npv'])
-
-    # Base Case for display
-    base = run_scenario(0.002, 0.05, price, 0.10, 0.14, params)
-    
-    data = {
-        "ls_npvs": ls_npvs,
-        "lr_npvs": lr_npvs,
-        "base_fcf": base['risk_adj_fcf'].tolist(),
-        "base_rev": base['rev'].tolist()
-    }
-    return data, f"Completed {n_sims} iterations. Base eNPV: ${base['licensee_enpv']:.2f}M"
 
 @app.callback(
-    [Output("graph-fcf", "figure"), Output("hist-licensee", "figure"), Output("hist-licensor", "figure")],
-    [Input("store-results", "data")]
+    Output("store-results", "data"),
+    Output("run-status", "children"),
+    Input("btn-run", "n_clicks"),
+    State("in-pop",    "value"), State("in-price", "value"), State("in-pen",   "value"),
+    State("in-cogs",   "value"), State("in-tax",   "value"), State("in-lsw",   "value"),
+    State("in-lrw",    "value"), State("p1",        "value"), State("p2",       "value"),
+    State("p3",        "value"), State("p4",        "value"), State("in-upfront","value"),
+    State("in-mil",    "value"), State("sl-sims",   "value"),
+    prevent_initial_call=True,
 )
-def update_graphs(data):
-    if not data: return [go.Figure()]*3
-    
-    # 1. Cash Flow Figure
-    fig_fcf = go.Figure()
-    fig_fcf.add_trace(go.Bar(x=YEARS, y=data['base_fcf'], name="Expected FCF (Risk-Adj)"))
-    fig_fcf.update_layout(title="Risk-Adjusted Annual Cash Flows", template="plotly_white")
-    
-    # 2. Licensee Hist
-    fig_ls = go.Figure(go.Histogram(x=data['ls_npvs'], nbinsx=50, marker_color='#2c3e50'))
-    fig_ls.update_layout(title="Licensee eNPV Distribution", xaxis_title="$ Millions")
-    
-    # 3. Licensor Hist
-    fig_lr = go.Figure(go.Histogram(x=data['lr_npvs'], nbinsx=50, marker_color='#e74c3c'))
-    fig_lr.update_layout(title="Licensor NPV Distribution", xaxis_title="$ Millions")
-    
-    return fig_fcf, fig_ls, fig_lr
+def run_simulation(n_clicks, pop, price, pen, cogs, tax, lsw, lrw,
+                   p1, p2, p3, p4, upfront, mil, n_sims):
+    params = build_params(pop, price, pen, cogs, tax, lsw, lrw, p1, p2, p3, p4, upfront, mil)
+    params["peak_pen"] = float(pen or 5) / 100
+
+    base = run_scenario(0.002, params["peak_pen"], float(price or 15000),
+                        float(lsw or 10) / 100, float(lrw or 14) / 100, params)
+
+    ls_npvs, lr_npvs = run_montecarlo(int(n_sims or 5000), params, float(price or 15000))
+    ls_s = npv_stats(ls_npvs)
+    lr_s = npv_stats(lr_npvs)
+
+    # Sensitivity sweep (6 vars × 2 directions)
+    sens_vars = {
+        "Peak Penetration":  ("peak_pen",    [params["peak_pen"]*0.4, params["peak_pen"]*1.8]),
+        "Price / Patient":   ("price_sens",  [float(price)*0.6, float(price)*1.5]),
+        "Ph2→Ph3 PTRS":      ("p2",          [params["p2"]*0.6, params["p2"]*1.5]),
+        "Licensee WACC":     ("lsw_sens",    [float(lsw)*0.7/100, float(lsw)*1.4/100]),
+        "COGS %":            ("cogs",        [params["cogs"]*0.6, params["cogs"]*1.5]),
+        "Tax Rate":          ("tax",         [params["tax"]*0.6, params["tax"]*1.5]),
+    }
+    sens_rows = []
+    base_enpv = base["licensee_enpv"]
+    for label, (key, (lo_v, hi_v)) in sens_vars.items():
+        def _enpv(v, k=key):
+            p = {**params}
+            if k == "price_sens": pr_v = v
+            else: pr_v = float(price); p[k] = v
+            return run_scenario(0.002, p.get("peak_pen", params["peak_pen"]),
+                                pr_v, p.get("lsw_sens", float(lsw)/100),
+                                float(lrw)/100, p)["licensee_enpv"]
+        sens_rows.append({
+            "label": label,
+            "npv_lo": _enpv(lo_v), "npv_hi": _enpv(hi_v),
+            "lo_v": lo_v, "hi_v": hi_v,
+        })
+
+    return {
+        "ls_npvs":    ls_npvs.tolist(),
+        "lr_npvs":    lr_npvs.tolist(),
+        "ls_stats":   ls_s,
+        "lr_stats":   lr_s,
+        "base_rev":   base["rev"].tolist(),
+        "base_fcf":   base["fcf"].tolist(),
+        "base_rfcf":  base["risk_adj_fcf"].tolist(),
+        "base_ebitda":base["ebitda"].tolist(),
+        "base_cogs":  base["cogs"].tolist(),
+        "base_royalty":base["royalty"].tolist(),
+        "base_ptr":   base["ptr"].tolist(),
+        "base_df_ls": base["df_ls"].tolist(),
+        "base_lf_cf": base["licensor_cf"].tolist(),
+        "base_enpv":  base["licensee_enpv"],
+        "base_lr_npv":base["licensor_npv"],
+        "sens_rows":  sens_rows,
+    }, (
+        f"✅ {int(n_sims):,} iterations complete │ "
+        f"Base eNPV: ${base['licensee_enpv']:.1f}M │ "
+        f"P(>0): {ls_s['prob_pos']*100:.1f}%"
+    )
+
+
+# ── KPI Cards ─────────────────────────────────────────────────────────────────
+@app.callback(
+    Output("kpi-ls-mean", "children"), Output("kpi-ls-prob", "children"),
+    Output("kpi-lr-mean", "children"), Output("kpi-lr-prob", "children"),
+    Input("store-results", "data"),
+)
+def update_kpis(data):
+    if not data:
+        empty = kpi_card("—", "—")
+        return empty, empty, empty, empty
+    ls, lr = data["ls_stats"], data["lr_stats"]
+    return (
+        kpi_card("Licensee Mean eNPV",     f"${ls['mean']:.1f}M",   COLORS["blue"],
+                 f"P5: ${ls['p5']:.1f}M  |  P95: ${ls['p95']:.1f}M"),
+        kpi_card("P(Licensee eNPV > 0)",   f"{ls['prob_pos']*100:.1f}%", COLORS["green"],
+                 f"Median: ${ls['p50']:.1f}M"),
+        kpi_card("Licensor Mean Deal NPV", f"${lr['mean']:.1f}M",   COLORS["teal"],
+                 f"P5: ${lr['p5']:.1f}M  |  P95: ${lr['p95']:.1f}M"),
+        kpi_card("P(Licensor NPV > 0)",    f"{lr['prob_pos']*100:.1f}%", COLORS["amber"],
+                 f"Median: ${lr['p50']:.1f}M"),
+    )
+
+
+# ── Main Tab Content ──────────────────────────────────────────────────────────
+@app.callback(
+    Output("main-content", "children"),
+    Input("main-tabs", "active_tab"),
+    Input("store-results", "data"),
+)
+def render_main(tab, data):
+    no_data = dbc.Alert("▶ Click Run Simulation to generate results.", color="info", className="mt-3")
+    if not data:
+        return no_data
+
+    # ── Revenue & Cash Flows ─────────────────────────────────────────────────
+    if tab == "t-cf":
+        rev  = data["base_rev"]
+        rfcf = data["base_rfcf"]
+        ebit = data["base_ebitda"]
+        cogs = data["base_cogs"]
+        rd_arr = [RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)]
+
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            subplot_titles=("Revenue Build-Up ($M)", "Risk-Adjusted FCF vs EBITDA ($M)"),
+                            vertical_spacing=0.12, row_heights=[0.55, 0.45])
+
+        fig.add_trace(go.Bar(x=YEARS, y=rev,  name="Gross Revenue", marker_color=COLORS["blue"],   opacity=0.85), row=1, col=1)
+        fig.add_trace(go.Bar(x=YEARS, y=[-v for v in cogs], name="COGS", marker_color=COLORS["red"],   opacity=0.7, base=0), row=1, col=1)
+        fig.add_trace(go.Bar(x=YEARS, y=[-v for v in rd_arr], name="R&D", marker_color=COLORS["grey"], opacity=0.7, base=0), row=1, col=1)
+        fig.add_trace(go.Scatter(x=YEARS, y=ebit, name="EBITDA", line=dict(color=COLORS["amber"], width=2.5), mode="lines+markers", marker_size=5), row=1, col=1)
+
+        colors_fcf = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in rfcf]
+        fig.add_trace(go.Bar(x=YEARS, y=rfcf, name="Risk-Adj FCF", marker_color=colors_fcf, opacity=0.85), row=2, col=1)
+        fig.add_trace(go.Scatter(x=YEARS, y=list(np.cumsum(rfcf)), name="Cumulative FCF",
+                                 line=dict(color=COLORS["blue"], width=2, dash="dot"), mode="lines"), row=2, col=1)
+        fig.add_hline(y=0, line_width=1, line_dash="solid", line_color="black", opacity=0.4, row=2, col=1)
+
+        fig.update_layout(template="plotly_white", height=560, barmode="overlay",
+                          legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                          margin=dict(t=60, b=40))
+        return dbc.Card(dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})), style={"borderRadius": "10px"})
+
+    # ── Monte Carlo ──────────────────────────────────────────────────────────
+    elif tab == "t-mc":
+        ls_npvs = data["ls_npvs"]
+        lr_npvs = data["lr_npvs"]
+        ls_s    = data["ls_stats"]
+        lr_s    = data["lr_stats"]
+
+        fig = make_subplots(rows=2, cols=2,
+                            subplot_titles=(
+                                "Licensee eNPV Distribution",
+                                "Licensor NPV Distribution",
+                                "Cumulative Probability (S-Curve)",
+                                "Percentile Summary",
+                            ), vertical_spacing=0.18, horizontal_spacing=0.1)
+
+        # Licensee hist
+        fig.add_trace(go.Histogram(x=ls_npvs, nbinsx=60, name="Licensee eNPV",
+                                   marker_color=COLORS["blue"], opacity=0.75), row=1, col=1)
+        fig.add_vline(x=ls_s["mean"], line_color=COLORS["amber"], line_width=2, line_dash="dash", row=1, col=1)
+        fig.add_vline(x=ls_s["p50"],  line_color=COLORS["teal"],  line_width=2, line_dash="dot",  row=1, col=1)
+        fig.add_vline(x=0,            line_color="black",          line_width=1,                    row=1, col=1)
+
+        # Licensor hist
+        fig.add_trace(go.Histogram(x=lr_npvs, nbinsx=60, name="Licensor NPV",
+                                   marker_color=COLORS["teal"], opacity=0.75), row=1, col=2)
+        fig.add_vline(x=lr_s["mean"], line_color=COLORS["amber"], line_width=2, line_dash="dash", row=1, col=2)
+        fig.add_vline(x=0,            line_color="black",          line_width=1,                    row=1, col=2)
+
+        # S-curve
+        sorted_ls = np.sort(ls_npvs)
+        sorted_lr = np.sort(lr_npvs)
+        n = len(sorted_ls)
+        cdf = np.arange(1, n + 1) / n
+        fig.add_trace(go.Scatter(x=sorted_ls, y=cdf * 100, name="Licensee CDF",
+                                 line=dict(color=COLORS["blue"], width=2)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=sorted_lr, y=cdf * 100, name="Licensor CDF",
+                                 line=dict(color=COLORS["teal"], width=2)), row=2, col=1)
+        fig.add_vline(x=0, line_color="black", line_width=1, row=2, col=1)
+        fig.add_hline(y=50, line_color=COLORS["grey"], line_dash="dot", line_width=1, row=2, col=1)
+
+        # Percentile bar chart
+        pcts  = ["P5", "P10", "P25", "P50", "P75", "P90", "P95"]
+        ls_v  = [ls_s["p5"], ls_s["p10"], ls_s["p25"], ls_s["p50"], ls_s["p75"], ls_s["p90"], ls_s["p95"]]
+        lr_v  = [lr_s["p5"], lr_s["p10"], lr_s["p25"], lr_s["p50"], lr_s["p75"], lr_s["p90"], lr_s["p95"]]
+        fig.add_trace(go.Bar(x=pcts, y=ls_v, name="Licensee", marker_color=COLORS["blue"], opacity=0.8), row=2, col=2)
+        fig.add_trace(go.Bar(x=pcts, y=lr_v, name="Licensor",  marker_color=COLORS["teal"], opacity=0.8), row=2, col=2)
+
+        fig.update_layout(template="plotly_white", height=640, barmode="group",
+                          legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
+                          margin=dict(t=80, b=40))
+        fig.update_yaxes(title_text="Cumulative %",  row=2, col=1)
+        fig.update_yaxes(title_text="NPV ($M)",       row=2, col=2)
+        fig.update_xaxes(title_text="eNPV ($M)",      row=2, col=1)
+
+        # Annotation for P(>0)
+        fig.add_annotation(
+            text=f"P(eNPV>0) = {ls_s['prob_pos']*100:.1f}%",
+            xref="x domain", yref="y domain", x=0.98, y=0.92,
+            showarrow=False, font=dict(color=COLORS["blue"], size=12, family="Arial Black"),
+            align="right", row=1, col=1,
+        )
+        fig.add_annotation(
+            text=f"P(NPV>0) = {lr_s['prob_pos']*100:.1f}%",
+            xref="x2 domain", yref="y2 domain", x=0.98, y=0.92,
+            showarrow=False, font=dict(color=COLORS["teal"], size=12, family="Arial Black"),
+            align="right",
+        )
+
+        return dbc.Card(dbc.CardBody(dcc.Graph(figure=fig, config={"displayModeBar": False})), style={"borderRadius": "10px"})
+
+    # ── DCF Table ────────────────────────────────────────────────────────────
+    elif tab == "t-dcf":
+        # Reconstruct base case from stored arrays
+        base_mock = {
+            "rev":          np.array(data["base_rev"]),
+            "cogs":         np.array(data["base_cogs"]),
+            "ebitda":       np.array(data["base_ebitda"]),
+            "royalty":      np.array(data["base_royalty"]),
+            "fcf":          np.array(data["base_fcf"]),
+            "risk_adj_fcf": np.array(data["base_rfcf"]),
+            "ptr":          np.array(data["base_ptr"]),
+            "df_ls":        np.array(data["base_df_ls"]),
+        }
+        rows = build_dcf_table(base_mock)
+
+        col_styles = {
+            "Year":               {"textAlign": "center", "fontWeight": "700", "backgroundColor": "#1565C0", "color": "white"},
+            "Revenue ($M)":       {"textAlign": "right", "color": COLORS["blue"], "fontWeight": "600"},
+            "COGS ($M)":          {"textAlign": "right", "color": COLORS["red"]},
+            "R&D ($M)":           {"textAlign": "right", "color": COLORS["grey"]},
+            "EBITDA ($M)":        {"textAlign": "right", "fontWeight": "600"},
+            "Royalty ($M)":       {"textAlign": "right", "color": COLORS["amber"]},
+            "FCF ($M)":           {"textAlign": "right", "fontWeight": "600"},
+            "Cum. P(Success)":    {"textAlign": "center"},
+            "Risk-Adj FCF ($M)":  {"textAlign": "right", "color": COLORS["teal"], "fontWeight": "600"},
+            "Discount Factor":    {"textAlign": "center"},
+            "Disc. eNPV ($M)":    {"textAlign": "right", "fontWeight": "700", "color": COLORS["blue"]},
+        }
+
+        columns = [{"name": c, "id": c} for c in rows[0].keys()]
+
+        total_enpv = data["base_enpv"]
+        summary = dbc.Alert([
+            html.Strong("Base Case Summary:  "),
+            f"Licensee eNPV = ${total_enpv:.2f}M  |  ",
+            f"Licensor NPV = ${data['base_lr_npv']:.2f}M  |  ",
+            f"Cumulative PTRS = {np.array(data['base_ptr'])[-1]*100:.2f}%",
+        ], color="primary", className="mb-3")
+
+        table = dash_table.DataTable(
+            data=rows,
+            columns=columns,
+            style_table={"overflowX": "auto"},
+            style_cell={
+                "fontFamily": "monospace", "fontSize": "12px",
+                "padding": "6px 10px", "border": "1px solid #e9ecef",
+                "whiteSpace": "nowrap",
+            },
+            style_header={
+                "backgroundColor": "#1565C0", "color": "white",
+                "fontWeight": "700", "textAlign": "center",
+                "border": "1px solid #0d47a1",
+            },
+            style_data_conditional=[
+                {"if": {"row_index": "odd"}, "backgroundColor": "#f8f9fa"},
+                {"if": {"filter_query": "{FCF ($M)} contains '-'", "column_id": "FCF ($M)"},
+                 "color": COLORS["red"], "fontWeight": "700"},
+                {"if": {"filter_query": "{Disc. eNPV ($M)} contains '-'", "column_id": "Disc. eNPV ($M)"},
+                 "color": COLORS["red"]},
+            ],
+            page_action="none",
+        )
+        return html.Div([summary, dbc.Card(dbc.CardBody(table), style={"borderRadius": "10px"})])
+
+    # ── Tornado / Sensitivity ─────────────────────────────────────────────────
+    elif tab == "t-sens":
+        rows = data["sens_rows"]
+        base_e = data["base_enpv"]
+        labels   = [r["label"]  for r in rows]
+        npv_lo   = [r["npv_lo"] for r in rows]
+        npv_hi   = [r["npv_hi"] for r in rows]
+        ranges   = [abs(h - l) for l, h in zip(npv_lo, npv_hi)]
+        order    = np.argsort(ranges)
+        labels   = [labels[i]  for i in order]
+        npv_lo   = [npv_lo[i]  for i in order]
+        npv_hi   = [npv_hi[i]  for i in order]
+
+        fig = go.Figure()
+        for i, (lb, lo, hi) in enumerate(zip(labels, npv_lo, npv_hi)):
+            bar_lo = min(lo, hi) - base_e
+            bar_hi = max(lo, hi) - base_e
+            fig.add_trace(go.Bar(
+                y=[lb], x=[bar_hi], name="Upside",   orientation="h",
+                marker_color=COLORS["blue"], opacity=0.85,
+                showlegend=(i == len(labels) - 1),
+            ))
+            fig.add_trace(go.Bar(
+                y=[lb], x=[bar_lo], name="Downside", orientation="h",
+                marker_color=COLORS["red"],  opacity=0.85,
+                showlegend=(i == len(labels) - 1),
+            ))
+
+        fig.add_vline(x=0, line_color="black", line_width=1.5)
+        fig.update_layout(
+            template="plotly_white", barmode="overlay", height=380,
+            title=f"Tornado — Δ eNPV vs Base Case (${base_e:.1f}M)",
+            xaxis_title="Δ eNPV ($M)",
+            legend=dict(orientation="h", y=1.08),
+            margin=dict(l=160, t=70, b=40),
+        )
+
+        # Also add scatter: price sensitivity
+        prices_sweep = np.linspace(5000, 40000, 50)
+        enpv_sweep = []
+        for pr_v in prices_sweep:
+            from copy import deepcopy
+            p_tmp = {
+                "eu_pop": 450, "ts": 0.09, "dr": 0.80, "tr": 0.50,
+                "cogs": 0.12, "ga": 0.01, "tax": 0.21, "upfront": 2.0,
+                "p1": 0.63, "p2": 0.30, "p3": 0.58, "p4": 0.90,
+                "rd": RD_SCHEDULE, "milestones": {2: 1.0, 4: 1.0, 6: 1.0},
+                "tiers": ROYALTY_TIERS_DEFAULT, "peak_pen": 0.05,
+            }
+            enpv_sweep.append(run_scenario(0.002, 0.05, pr_v, 0.10, 0.14, p_tmp)["licensee_enpv"])
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=prices_sweep / 1000, y=enpv_sweep,
+                                  mode="lines", line=dict(color=COLORS["blue"], width=2.5),
+                                  fill="tozeroy", fillcolor="rgba(21,101,192,0.1)"))
+        fig2.add_hline(y=0, line_color="black", line_width=1, line_dash="dash")
+        fig2.update_layout(
+            template="plotly_white", height=280,
+            title="Price Sensitivity: eNPV vs Annual Price per Patient",
+            xaxis_title="Price ($K/patient/year)", yaxis_title="Licensee eNPV ($M)",
+            margin=dict(t=50, b=40),
+        )
+
+        return html.Div([
+            dbc.Card(dbc.CardBody(dcc.Graph(figure=fig,  config={"displayModeBar": False})), style={"borderRadius": "10px", "marginBottom": "16px"}),
+            dbc.Card(dbc.CardBody(dcc.Graph(figure=fig2, config={"displayModeBar": False})), style={"borderRadius": "10px"}),
+        ])
+
+    # ── Licensor Bridge ──────────────────────────────────────────────────────
+    elif tab == "t-bridge":
+        lf_cf   = np.array(data["base_lf_cf"])
+        df_lr   = np.array([(1/(1+0.14))**i for i in range(N_YEARS)])
+        disc_lc = lf_cf * df_lr
+
+        upfront_pv   = disc_lc[0]
+        milestone_pv = sum(disc_lc[i] for i in [2, 4, 6] if i < N_YEARS)
+        royalty_pv   = sum(disc_lc[i] for i in range(N_YEARS) if i not in [0, 2, 4, 6] and disc_lc[i] > 0)
+
+        components = ["Upfront\nPayment", "Dev\nMilestones", "Royalty\nIncome", "Total\nDeal NPV"]
+        values     = [upfront_pv, milestone_pv, royalty_pv, None]
+        running, x_vals, y_vals, texts, bar_colors = 0, [], [], [], []
+        for i, (comp, val) in enumerate(zip(components, values)):
+            if val is None:
+                x_vals.append(comp); y_vals.append(running)
+                texts.append(f"${running:.2f}M"); bar_colors.append(COLORS["teal"])
+            else:
+                x_vals.append(comp); y_vals.append(val)
+                texts.append(f"${val:.2f}M")
+                bar_colors.append(COLORS["blue"] if val >= 0 else COLORS["red"])
+                running += val
+
+        fig_bridge = go.Figure(go.Waterfall(
+            x=x_vals,
+            measure=["relative", "relative", "relative", "total"],
+            y=[upfront_pv, milestone_pv, royalty_pv, 0],
+            text=texts,
+            textposition="inside",
+            connector={"line": {"color": "#ccc"}},
+            increasing={"marker": {"color": COLORS["blue"]}},
+            decreasing={"marker": {"color": COLORS["red"]}},
+            totals={"marker": {"color": COLORS["teal"]}},
+        ))
+        fig_bridge.update_layout(
+            template="plotly_white", height=360,
+            title=f"Licensor Deal NPV Bridge — Total = ${data['base_lr_npv']:.2f}M",
+            yaxis_title="Discounted Value ($M)",
+            margin=dict(t=60, b=40),
+        )
+
+        # Annual licensor income bar
+        fig_ann = go.Figure()
+        colors_lc = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lf_cf]
+        fig_ann.add_trace(go.Bar(x=YEARS, y=lf_cf, name="Licensor Cash Flow",
+                                 marker_color=colors_lc, opacity=0.85))
+        fig_ann.add_trace(go.Scatter(x=YEARS, y=np.cumsum(disc_lc), mode="lines+markers",
+                                     name="Cum. PV of Income", line=dict(color=COLORS["amber"], width=2),
+                                     marker_size=4))
+        fig_ann.add_hline(y=0, line_color="black", line_width=1)
+        fig_ann.update_layout(
+            template="plotly_white", height=300,
+            title="Annual Licensor Risk-Adjusted Cash Flow",
+            yaxis_title="$M", margin=dict(t=50, b=40),
+            legend=dict(orientation="h", y=1.06),
+        )
+
+        return html.Div([
+            dbc.Card(dbc.CardBody(dcc.Graph(figure=fig_bridge, config={"displayModeBar": False})), style={"borderRadius": "10px", "marginBottom": "16px"}),
+            dbc.Card(dbc.CardBody(dcc.Graph(figure=fig_ann,    config={"displayModeBar": False})), style={"borderRadius": "10px"}),
+        ])
+
+    return no_data
+
+
+# ============================================================================
+# SECTION 6 — ENTRY POINT
+# ============================================================================
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 7860))
-    app.run_server(host="0.0.0.0", port=port, debug=False)
-    
+    app.run(host="0.0.0.0", port=port, debug=False)
