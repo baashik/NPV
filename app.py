@@ -172,25 +172,68 @@ def npv_stats(arr):
 
 
 def build_dcf_table(base):
-    """Returns a list-of-dicts for a horizontal (years as rows) DCF table."""
-    rd_arr = np.array([RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)])
+    """
+    Returns (columns, rows, metric_rows) for a TRANSPOSED DCF table:
+      - First column  = metric label (Line Item)
+      - Remaining 17 columns = one per year (2026 to 2042)
+    Each row is one financial line item; years run left to right.
+    """
+    rd_arr   = np.array([RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)])
     disc_fcf = base["risk_adj_fcf"] * base["df_ls"]
+
+    # Reconstruct approximate population row for display
+    pop_row, pop = [], 450.0
+    for _ in range(N_YEARS):
+        pop *= 1.002
+        pop_row.append(pop)
+
+    LABEL_COL = "Line Item"
+    year_cols = [str(y) for y in YEARS]
+
+    # (label, values_array_or_None, fmt_key)
+    # fmt_key drives number formatting; None values = section header row
+    metric_rows = [
+        ("── REVENUE MODEL",       None,                   "header"),
+        ("EU Population (M)",      pop_row,                "pop"),
+        ("Gross Revenue ($M)",     base["rev"],            "rev"),
+        ("Less: COGS ($M)",        -base["cogs"],          "cost"),
+        ("── COSTS & R&D",         None,                   "header"),
+        ("R&D Expense ($M)",       -rd_arr,                "cost"),
+        ("EBITDA ($M)",            base["ebitda"],         "ebitda"),
+        ("── DEAL ECONOMICS",      None,                   "header"),
+        ("Royalty Paid ($M)",      -base["royalty"],       "cost"),
+        ("Free Cash Flow ($M)",    base["fcf"],            "fcf"),
+        ("── RISK ADJUSTMENT",     None,                   "header"),
+        ("Cum. P(Success) %",      base["ptr"] * 100,      "pct"),
+        ("Risk-Adj FCF ($M)",      base["risk_adj_fcf"],   "rfcf"),
+        ("── DISCOUNTING",         None,                   "header"),
+        ("Discount Factor",        base["df_ls"],          "df"),
+        ("Disc. eNPV ($M)",        disc_fcf,               "enpv"),
+    ]
+
+    columns = [{"name": LABEL_COL, "id": LABEL_COL}] + \
+              [{"name": y, "id": y} for y in year_cols]
+
     rows = []
-    for i, yr in enumerate(YEARS):
-        rows.append({
-            "Year":                str(yr),
-            "Revenue ($M)":        f"{base['rev'][i]:,.2f}",
-            "COGS ($M)":           f"{base['cogs'][i]:,.2f}",
-            "R&D ($M)":            f"{rd_arr[i]:,.2f}",
-            "EBITDA ($M)":         f"{base['ebitda'][i]:,.2f}",
-            "Royalty ($M)":        f"{base['royalty'][i]:,.2f}",
-            "FCF ($M)":            f"{base['fcf'][i]:,.2f}",
-            "Cum. P(Success)":     f"{base['ptr'][i]*100:.1f}%",
-            "Risk-Adj FCF ($M)":   f"{base['risk_adj_fcf'][i]:,.2f}",
-            "Discount Factor":     f"{base['df_ls'][i]:.4f}",
-            "Disc. eNPV ($M)":     f"{disc_fcf[i]:,.2f}",
-        })
-    return rows
+    for label, vals, fmt in metric_rows:
+        row = {LABEL_COL: label}
+        if vals is None:
+            for y in year_cols:
+                row[y] = ""
+        else:
+            for i, y in enumerate(year_cols):
+                v = float(vals[i])
+                if fmt == "pop":
+                    row[y] = f"{v:,.1f}"
+                elif fmt == "pct":
+                    row[y] = f"{v:.1f}%"
+                elif fmt == "df":
+                    row[y] = f"{v:.4f}"
+                else:
+                    row[y] = f"{v:,.2f}"
+        rows.append(row)
+
+    return columns, rows, metric_rows
 
 
 # ============================================================================
@@ -561,7 +604,6 @@ def render_main(tab, data):
 
     # ── DCF Table ────────────────────────────────────────────────────────────
     elif tab == "t-dcf":
-        # Reconstruct base case from stored arrays
         base_mock = {
             "rev":          np.array(data["base_rev"]),
             "cogs":         np.array(data["base_cogs"]),
@@ -572,56 +614,141 @@ def render_main(tab, data):
             "ptr":          np.array(data["base_ptr"]),
             "df_ls":        np.array(data["base_df_ls"]),
         }
-        rows = build_dcf_table(base_mock)
+        columns, rows, metric_rows = build_dcf_table(base_mock)
 
-        col_styles = {
-            "Year":               {"textAlign": "center", "fontWeight": "700", "backgroundColor": "#1565C0", "color": "white"},
-            "Revenue ($M)":       {"textAlign": "right", "color": COLORS["blue"], "fontWeight": "600"},
-            "COGS ($M)":          {"textAlign": "right", "color": COLORS["red"]},
-            "R&D ($M)":           {"textAlign": "right", "color": COLORS["grey"]},
-            "EBITDA ($M)":        {"textAlign": "right", "fontWeight": "600"},
-            "Royalty ($M)":       {"textAlign": "right", "color": COLORS["amber"]},
-            "FCF ($M)":           {"textAlign": "right", "fontWeight": "600"},
-            "Cum. P(Success)":    {"textAlign": "center"},
-            "Risk-Adj FCF ($M)":  {"textAlign": "right", "color": COLORS["teal"], "fontWeight": "600"},
-            "Discount Factor":    {"textAlign": "center"},
-            "Disc. eNPV ($M)":    {"textAlign": "right", "fontWeight": "700", "color": COLORS["blue"]},
-        }
+        # Row-level conditional styles
+        # Map each row_index to its fmt so we can colour by type
+        style_data_conditional = []
 
-        columns = [{"name": c, "id": c} for c in rows[0].keys()]
+        # Alternating background for non-header rows
+        header_indices = [i for i, (_, _, fmt) in enumerate(metric_rows) if fmt == "header"]
+        for idx, (_, _, fmt) in enumerate(metric_rows):
+            if fmt == "header":
+                # Dark section-header rows
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#1a1a2e",
+                    "color": "white",
+                    "fontWeight": "700",
+                    "fontStyle": "normal",
+                    "fontSize": "11px",
+                    "letterSpacing": "0.05em",
+                })
+            elif fmt in ("rev",):
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#E3F2FD",
+                    "color": COLORS["blue"],
+                    "fontWeight": "700",
+                })
+            elif fmt == "ebitda":
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#F3E5F5",
+                    "fontWeight": "700",
+                })
+            elif fmt == "fcf":
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#E8F5E9",
+                    "fontWeight": "700",
+                })
+            elif fmt == "rfcf":
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#E0F7FA",
+                    "color": COLORS["teal"],
+                    "fontWeight": "700",
+                })
+            elif fmt == "enpv":
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#1565C0",
+                    "color": "white",
+                    "fontWeight": "700",
+                    "fontSize": "12px",
+                })
+            elif fmt == "cost":
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "color": COLORS["red"],
+                })
+            elif idx % 2 == 0:
+                style_data_conditional.append({
+                    "if": {"row_index": idx},
+                    "backgroundColor": "#FAFAFA",
+                })
+
+        # Freeze first column (Line Item label)
+        style_data_conditional.append({
+            "if": {"column_id": "Line Item"},
+            "fontWeight": "600",
+            "textAlign": "left",
+            "backgroundColor": "#F8F9FA",
+            "borderRight": "2px solid #dee2e6",
+            "minWidth": "180px",
+            "maxWidth": "180px",
+            "width": "180px",
+        })
+        # Override label column for header rows
+        for idx, (_, _, fmt) in enumerate(metric_rows):
+            if fmt == "header":
+                style_data_conditional.append({
+                    "if": {"row_index": idx, "column_id": "Line Item"},
+                    "backgroundColor": "#1a1a2e",
+                    "color": "white",
+                })
+            elif fmt == "enpv":
+                style_data_conditional.append({
+                    "if": {"row_index": idx, "column_id": "Line Item"},
+                    "backgroundColor": "#1565C0",
+                    "color": "white",
+                })
 
         total_enpv = data["base_enpv"]
         summary = dbc.Alert([
-            html.Strong("Base Case Summary:  "),
-            f"Licensee eNPV = ${total_enpv:.2f}M  |  ",
-            f"Licensor NPV = ${data['base_lr_npv']:.2f}M  |  ",
-            f"Cumulative PTRS = {np.array(data['base_ptr'])[-1]*100:.2f}%",
+            html.Strong("Base Case:  "),
+            f"Licensee eNPV = ${total_enpv:.2f}M  │  ",
+            f"Licensor NPV = ${data['base_lr_npv']:.2f}M  │  ",
+            f"Cumulative PTRS = {np.array(data['base_ptr'])[-1]*100:.2f}%  │  ",
+            f"Years 2026–2042 (left → right)",
         ], color="primary", className="mb-3")
 
         table = dash_table.DataTable(
             data=rows,
             columns=columns,
-            style_table={"overflowX": "auto"},
+            style_table={
+                "overflowX": "auto",
+                "minWidth": "100%",
+            },
             style_cell={
-                "fontFamily": "monospace", "fontSize": "12px",
-                "padding": "6px 10px", "border": "1px solid #e9ecef",
+                "fontFamily": "'Courier New', monospace",
+                "fontSize": "11.5px",
+                "padding": "5px 9px",
+                "border": "1px solid #e9ecef",
                 "whiteSpace": "nowrap",
+                "textAlign": "right",
+                "minWidth": "72px",
+                "maxWidth": "90px",
             },
             style_header={
-                "backgroundColor": "#1565C0", "color": "white",
-                "fontWeight": "700", "textAlign": "center",
+                "backgroundColor": "#1565C0",
+                "color": "white",
+                "fontWeight": "700",
+                "textAlign": "center",
                 "border": "1px solid #0d47a1",
+                "fontSize": "12px",
+                "padding": "7px 6px",
             },
-            style_data_conditional=[
-                {"if": {"row_index": "odd"}, "backgroundColor": "#f8f9fa"},
-                {"if": {"filter_query": "{FCF ($M)} contains '-'", "column_id": "FCF ($M)"},
-                 "color": COLORS["red"], "fontWeight": "700"},
-                {"if": {"filter_query": "{Disc. eNPV ($M)} contains '-'", "column_id": "Disc. eNPV ($M)"},
-                 "color": COLORS["red"]},
-            ],
+            style_data_conditional=style_data_conditional,
+            fixed_columns={"headers": True, "data": 1},
             page_action="none",
         )
-        return html.Div([summary, dbc.Card(dbc.CardBody(table), style={"borderRadius": "10px"})])
+        return html.Div([
+            summary,
+            dbc.Card(dbc.CardBody(table, style={"padding": "0"}),
+                     style={"borderRadius": "10px", "overflow": "hidden"}),
+        ])
 
     # ── Tornado / Sensitivity ─────────────────────────────────────────────────
     elif tab == "t-sens":
