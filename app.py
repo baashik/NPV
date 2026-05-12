@@ -278,87 +278,100 @@ app = Dash(
 )
 server = app.server
 
-SIDEBAR = dbc.Card([
-    html.Div([
-        html.H5("⚙️ Assumptions", style={"fontWeight": "700", "color": "#1a1a2e"}),
-        html.Hr(style={"margin": "8px 0"}),
-    ]),
-
-    # ── Scenario Name ──────────────────────────────────────────────────────
-    dbc.Label("Scenario Name (e.g., GATX-11, Competitor A)", style={"fontSize": "0.82rem", "fontWeight": "600"}),
-    dbc.Input(id="scenario-name", value="GATX-11", type="text", size="sm", placeholder="Enter scenario name"),
-
-    # ── Load Saved Scenario ────────────────────────────────────────────────
-    html.P("LOAD SAVED SCENARIO", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "12px 0 6px"}),
-    dcc.Dropdown(id="load-scenario-dropdown", options=[], placeholder="Select saved scenario...", style={"fontSize": "0.85rem"}),
-    dbc.Button([html.I(className="bi bi-upload me-2"), "Load"], id="btn-load", color="info", size="sm", className="w-100 mt-2"),
-
-    html.Hr(style={"margin": "12px 0"}),
-
-    # ── Commercial ─────────────────────────────────────────────────────────
-    html.P("COMMERCIAL", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "12px 0 6px"}),
-    dbc.Label("EU Population (M)", style={"fontSize": "0.82rem"}),
-    dbc.Input(id="in-pop",   value=450.0,    type="number", min=100,   max=1000, step=10,   size="sm"),
-    dbc.Label("Price / Patient ($)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-price", value=15000.0,  type="number", min=1000,  step=500, size="sm"),
-    dbc.Label("Peak Penetration (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-pen",   value=5.0,      type="number", min=0.5,   max=30,   step=0.5,  size="sm"),
-    dbc.Label("COGS (% of Rev)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-cogs",  value=12.0,     type="number", min=1,     max=50,   step=1,    size="sm"),
-    dbc.Label("Tax Rate (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-tax",   value=21.0,     type="number", min=0,     max=50,   step=1,    size="sm"),
-
-    # ── Discount Rates ───────────────────────────────────────────────────────
-    html.P("DISCOUNT RATES", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
-    dbc.Label("Licensee WACC (%)", style={"fontSize": "0.82rem"}),
-    dbc.Input(id="in-lsw",  value=10.0,  type="number", min=3, max=30, step=0.5, size="sm"),
-    dbc.Label("Licensor WACC (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-lrw",  value=14.0,  type="number", min=3, max=30, step=0.5, size="sm"),
-
-    # ── PTRS ───────────────────────────────────────────────────────────
-    html.P("CLINICAL SUCCESS (PTRS %)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
-    dbc.Label("Ph1 → Ph2", style={"fontSize": "0.82rem"}),
-    dbc.Input(id="p1", value=63.0, type="number", min=1, max=100, step=1, size="sm"),
-    dbc.Label("Ph2 → Ph3", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="p2", value=30.0, type="number", min=1, max=100, step=1, size="sm"),
-    dbc.Label("Ph3 → NDA", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="p3", value=58.0, type="number", min=1, max=100, step=1, size="sm"),
-    dbc.Label("NDA → Approval", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="p4", value=90.0, type="number", min=1, max=100, step=1, size="sm"),
-
-    # ── Deal Terms ─────────────────────────────────────────────────────────
-    html.P("DEAL TERMS ($M)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "14px 0 6px"}),
-    dbc.Label("Upfront Payment ($M)", style={"fontSize": "0.82rem"}),
-    dbc.Input(id="in-upfront", value=2.0, type="number", min=0, step=0.5, size="sm"),
-    dbc.Label("Ph1/Ph2/Ph3 Milestone ($M each)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
-    dbc.Input(id="in-mil", value=1.0, type="number", min=0, step=0.5, size="sm"),
-
-    html.Hr(style={"margin": "16px 0 10px"}),
-    dbc.Label("Simulations", style={"fontSize": "0.82rem"}),
-    dcc.Slider(id="sl-sims", min=1000, max=10000, step=1000, value=5000,
-               marks={1000: "1K", 5000: "5K", 10000: "10K"},
-               tooltip={"placement": "bottom"}),
-    html.Br(),
-    
-    # ── Buttons Row ────────────────────────────────────────────────────────
+ACTION_BAR = dbc.Card([
     dbc.Row([
-        dbc.Col(dbc.Button([html.I(className="bi bi-play-circle me-1"), "Run"],
-                           id="btn-run", color="primary", size="sm", className="w-100"), width=6),
-        dbc.Col(dbc.Button([html.I(className="bi bi-download me-1"), "Save"],
-                           id="btn-save", color="success", size="sm", className="w-100"), width=6),
-    ], className="mt-2 g-1"),
-    
+        dbc.Col([
+            dbc.Label("Scenario", style={"fontSize": "0.7rem", "fontWeight": "700", "marginBottom": "2px"}),
+            dbc.Input(id="scenario-name", value="GATX-11", type="text", size="sm", placeholder="Scenario name"),
+        ], md=2),
+        dbc.Col([
+            dbc.Label("Load Saved", style={"fontSize": "0.7rem", "fontWeight": "700", "marginBottom": "2px"}),
+            dbc.Row([
+                dbc.Col(dcc.Dropdown(id="load-scenario-dropdown", options=[], placeholder="Select...", style={"fontSize": "0.8rem"}), md=8),
+                dbc.Col(dbc.Button("Load", id="btn-load", color="info", size="sm", className="w-100"), md=4),
+            ], className="g-1"),
+        ], md=3),
+        dbc.Col([
+            dbc.Label("Simulations", style={"fontSize": "0.7rem", "fontWeight": "700", "marginBottom": "2px"}),
+            dcc.Slider(id="sl-sims", min=1000, max=10000, step=1000, value=5000,
+                       marks={1000: "1K", 5000: "5K", 10000: "10K"},
+                       tooltip={"placement": "bottom"}),
+        ], md=4),
+        dbc.Col([
+            dbc.Label("Actions", style={"fontSize": "0.7rem", "fontWeight": "700", "marginBottom": "2px"}),
+            dbc.ButtonGroup([
+                dbc.Button([html.I(className="bi bi-play-circle me-1"), "Run"], id="btn-run", color="primary", size="sm"),
+                dbc.Button([html.I(className="bi bi-download me-1"), "Save"], id="btn-save", color="success", size="sm"),
+                dbc.Button([html.I(className="bi bi-file-earmark-arrow-down me-1"), "Export"], id="btn-export", color="secondary", size="sm"),
+                dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"], id="btn-delete", color="danger", size="sm"),
+            ], size="sm"),
+        ], md=3),
+    ], className="g-2 align-items-end"),
     dbc.Row([
-        dbc.Col(dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
-                           id="btn-delete", color="danger", size="sm", className="w-100"), width=6),
-        dbc.Col(dbc.Button([html.I(className="bi bi-file-earmark-arrow-down me-1"), "Export"],
-                           id="btn-export", color="secondary", size="sm", className="w-100"), width=6),
-    ], className="mt-1 g-1"),
+        dbc.Col(html.Div(id="run-status", style={"fontSize": "0.78rem", "color": "#555", "minHeight": "20px"}), md=6),
+        dbc.Col(html.Div(id="save-status", style={"fontSize": "0.75rem", "color": "#555", "minHeight": "20px"}), md=6, style={"textAlign": "right"}),
+    ], className="mt-1"),
+], body=True, style={"borderRadius": "10px", "marginBottom": "12px"})
 
-    html.Div(id="save-status", style={"fontSize": "0.75rem", "color": "#555", "marginTop": "8px", "minHeight": "20px"}),
-    html.Div(id="run-status", style={"fontSize": "0.78rem", "color": "#555", "marginTop": "4px"}),
 
-], body=True, style={"position": "sticky", "top": "10px", "overflowY": "auto", "maxHeight": "96vh", "borderRadius": "10px"})
+def assumptions_tab_content():
+    return dbc.Card([
+        dbc.CardBody([
+            dbc.Row([
+                dbc.Col([
+                    html.P("COMMERCIAL", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    dbc.Label("EU Population (M)", style={"fontSize": "0.82rem"}),
+                    dbc.Input(id="in-pop", value=450.0, type="number", min=100, max=1000, step=10, size="sm"),
+                    dbc.Label("Price / Patient ($)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-price", value=15000.0, type="number", min=1000, step=500, size="sm"),
+                    dbc.Label("Peak Penetration (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-pen", value=5.0, type="number", min=0.5, max=30, step=0.5, size="sm"),
+                    dbc.Label("COGS (% of Rev)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-cogs", value=12.0, type="number", min=1, max=50, step=1, size="sm"),
+                    dbc.Label("Tax Rate (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-tax", value=21.0, type="number", min=0, max=50, step=1, size="sm"),
+                ], md=4),
+                dbc.Col([
+                    html.P("DISCOUNT RATES", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    dbc.Label("Licensee WACC (%)", style={"fontSize": "0.82rem"}),
+                    dbc.Input(id="in-lsw", value=10.0, type="number", min=3, max=30, step=0.5, size="sm"),
+                    dbc.Label("Licensor WACC (%)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-lrw", value=14.0, type="number", min=3, max=30, step=0.5, size="sm"),
+                    html.Div(style={"height": "16px"}),
+                    html.P("CLINICAL SUCCESS (PTRS %)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    dbc.Label("Ph1 → Ph2", style={"fontSize": "0.82rem"}),
+                    dbc.Input(id="p1", value=63.0, type="number", min=1, max=100, step=1, size="sm"),
+                    dbc.Label("Ph2 → Ph3", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="p2", value=30.0, type="number", min=1, max=100, step=1, size="sm"),
+                    dbc.Label("Ph3 → NDA", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="p3", value=58.0, type="number", min=1, max=100, step=1, size="sm"),
+                    dbc.Label("NDA → Approval", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="p4", value=90.0, type="number", min=1, max=100, step=1, size="sm"),
+                ], md=4),
+                dbc.Col([
+                    html.P("DEAL TERMS ($M)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    dbc.Label("Upfront Payment ($M)", style={"fontSize": "0.82rem"}),
+                    dbc.Input(id="in-upfront", value=2.0, type="number", min=0, step=0.5, size="sm"),
+                    dbc.Label("Ph1/Ph2/Ph3 Milestone ($M each)", style={"fontSize": "0.82rem", "marginTop": "6px"}),
+                    dbc.Input(id="in-mil", value=1.0, type="number", min=0, step=0.5, size="sm"),
+                    html.Div(style={"height": "16px"}),
+                    html.P("ROYALTY TIERS", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    html.Div([
+                        html.P(html.Span("• 5% on first $100M"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                        html.P(html.Span("• 7% on $100–200M"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                        html.P(html.Span("• 9% on $200M+"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                    ]),
+                    html.Div(style={"height": "16px"}),
+                    html.P("EPIDEMIOLOGY (fixed)", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "0 0 8px"}),
+                    html.Div([
+                        html.P(html.Span("• Target Population: 9% of EU"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                        html.P(html.Span("• Diagnosis Rate: 80%"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                        html.P(html.Span("• Treatment Rate: 50%"), style={"fontSize": "0.82rem", "margin": "2px 0"}),
+                    ]),
+                ], md=4),
+            ]),
+        ]),
+    ], style={"borderRadius": "10px"})
 
 
 MAIN = html.Div([
@@ -372,12 +385,13 @@ MAIN = html.Div([
 
     # ── Tabs ───────────────────────────────────────────────────────────
     dbc.Tabs([
+        dbc.Tab(label="⚙️ Assumptions",       tab_id="t-assumptions"),
         dbc.Tab(label="📈 Revenue & Cash Flows", tab_id="t-cf"),
         dbc.Tab(label="🎲 Monte Carlo",          tab_id="t-mc"),
         dbc.Tab(label="📊 DCF Table",            tab_id="t-dcf"),
         dbc.Tab(label="🌪️ Tornado / Sensitivity",tab_id="t-sens"),
         dbc.Tab(label="🏦 Licensor Bridge",      tab_id="t-bridge"),
-    ], id="main-tabs", active_tab="t-cf", className="mb-3"),
+    ], id="main-tabs", active_tab="t-assumptions", className="mb-3"),
 
     html.Div(id="main-content"),
 ], style={"padding": "0 8px"})
@@ -398,14 +412,17 @@ app.layout = dbc.Container([
         ], md=3),
     ], className="py-3 mb-2", style={"borderBottom": "3px solid #1565C0"}),
 
+    dbc.Row([
+        dbc.Col(ACTION_BAR, md=12),
+    ], className="mb-2"),
+
     dcc.Store(id="store-results"),
     dcc.Store(id="store-scenarios", data={}),
     dcc.Download(id="download-export"),
 
     dbc.Row([
-        dbc.Col(SIDEBAR, md=3),
-        dbc.Col(MAIN,    md=9),
-    ], className="mt-3"),
+        dbc.Col(MAIN, md=12),
+    ], className="mt-1"),
 
 ], fluid=True, style={"backgroundColor": COLORS["bg"], "minHeight": "100vh"})
 
@@ -460,7 +477,7 @@ def update_scenario_dropdown(scenarios_data):
 def load_scenario(n_clicks, scenario_name, scenarios_data):
     if not scenario_name or not scenarios_data or scenario_name not in scenarios_data:
         return no_update
-    
+
     s = scenarios_data[scenario_name]
     return (
         s["eu_pop"], s["price"], s["pen"], s["cogs"], s["tax"], s["lsw"],
@@ -558,10 +575,10 @@ def save_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lrw,
                   p1, p2, p3, p4, upfront, mil, scenarios_data):
     if not scenario_name or scenario_name.strip() == "":
         return scenarios_data or {}, "❌ Please enter a scenario name"
-    
+
     scenario_name = scenario_name.strip()
     scenarios = scenarios_data or {}
-    
+
     scenarios[scenario_name] = {
         "eu_pop": float(pop or 450),
         "price": float(price or 15000),
@@ -578,7 +595,7 @@ def save_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lrw,
         "mil": float(mil or 1),
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-    
+
     return scenarios, f"✅ Saved: {scenario_name} ({len(scenarios)} scenario{'s' if len(scenarios) > 1 else ''})"
 
 
@@ -594,7 +611,7 @@ def save_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lrw,
 def delete_scenario(n_clicks, scenario_name, scenarios_data):
     if not scenario_name or not scenarios_data or scenario_name not in scenarios_data:
         return scenarios_data or {}, "❌ Select a scenario to delete"
-    
+
     scenarios = {k: v for k, v in scenarios_data.items() if k != scenario_name}
     return scenarios, f"🗑️ Deleted: {scenario_name}"
 
@@ -615,7 +632,7 @@ def export_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lr
                     p1, p2, p3, p4, upfront, mil, results):
     if not scenario_name:
         scenario_name = "Export"
-    
+
     export_data = {
         "scenario_name": scenario_name,
         "exported_at": datetime.now().isoformat(),
@@ -636,7 +653,7 @@ def export_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lr
         },
         "results": results or {},
     }
-    
+
     return dcc.send_string(json.dumps(export_data, indent=2), f"{scenario_name}_NPV_Analysis.json")
 
 
@@ -671,6 +688,11 @@ def update_kpis(data):
 )
 def render_main(tab, data):
     no_data = dbc.Alert("▶ Click Run Simulation to generate results.", color="info", className="mt-3")
+
+    # ── Assumptions Tab ────────────────────────────────────────────────────
+    if tab == "t-assumptions":
+        return assumptions_tab_content()
+
     if not data:
         return no_data
 
