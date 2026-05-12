@@ -7,8 +7,10 @@ import numpy as np
 import pandas as pd
 import warnings
 import os
+import json
+from datetime import datetime
 
-from dash import Dash, dcc, html, Input, Output, State, no_update, dash_table
+from dash import Dash, dcc, html, Input, Output, State, no_update, dash_table, ctx
 import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
 import plotly.express as px
@@ -282,6 +284,17 @@ SIDEBAR = dbc.Card([
         html.Hr(style={"margin": "8px 0"}),
     ]),
 
+    # ── Scenario Name ──────────────────────────────────────────────────────
+    dbc.Label("Scenario Name (e.g., GATX-11, Competitor A)", style={"fontSize": "0.82rem", "fontWeight": "600"}),
+    dbc.Input(id="scenario-name", value="GATX-11", type="text", size="sm", placeholder="Enter scenario name"),
+
+    # ── Load Saved Scenario ────────────────────────────────────────────────
+    html.P("LOAD SAVED SCENARIO", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "12px 0 6px"}),
+    dcc.Dropdown(id="load-scenario-dropdown", options=[], placeholder="Select saved scenario...", style={"fontSize": "0.85rem"}),
+    dbc.Button([html.I(className="bi bi-upload me-2"), "Load"], id="btn-load", color="info", size="sm", className="w-100 mt-2"),
+
+    html.Hr(style={"margin": "12px 0"}),
+
     # ── Commercial ─────────────────────────────────────────────────────────
     html.P("COMMERCIAL", style={"fontWeight": "700", "fontSize": "0.7rem", "color": "#888", "letterSpacing": "0.1em", "margin": "12px 0 6px"}),
     dbc.Label("EU Population (M)", style={"fontSize": "0.82rem"}),
@@ -326,9 +339,24 @@ SIDEBAR = dbc.Card([
                marks={1000: "1K", 5000: "5K", 10000: "10K"},
                tooltip={"placement": "bottom"}),
     html.Br(),
-    dbc.Button([html.I(className="bi bi-play-circle me-2"), "Run Simulation"],
-               id="btn-run", color="primary", size="md", className="w-100 mt-2"),
-    html.Div(id="run-status", style={"fontSize": "0.78rem", "color": "#555", "marginTop": "8px"}),
+    
+    # ── Buttons Row ────────────────────────────────────────────────────────
+    dbc.Row([
+        dbc.Col(dbc.Button([html.I(className="bi bi-play-circle me-1"), "Run"],
+                           id="btn-run", color="primary", size="sm", className="w-100"), width=6),
+        dbc.Col(dbc.Button([html.I(className="bi bi-download me-1"), "Save"],
+                           id="btn-save", color="success", size="sm", className="w-100"), width=6),
+    ], className="mt-2 g-1"),
+    
+    dbc.Row([
+        dbc.Col(dbc.Button([html.I(className="bi bi-trash me-1"), "Delete"],
+                           id="btn-delete", color="danger", size="sm", className="w-100"), width=6),
+        dbc.Col(dbc.Button([html.I(className="bi bi-file-earmark-arrow-down me-1"), "Export"],
+                           id="btn-export", color="secondary", size="sm", className="w-100"), width=6),
+    ], className="mt-1 g-1"),
+
+    html.Div(id="save-status", style={"fontSize": "0.75rem", "color": "#555", "marginTop": "8px", "minHeight": "20px"}),
+    html.Div(id="run-status", style={"fontSize": "0.78rem", "color": "#555", "marginTop": "4px"}),
 
 ], body=True, style={"position": "sticky", "top": "10px", "overflowY": "auto", "maxHeight": "96vh", "borderRadius": "10px"})
 
@@ -365,12 +393,14 @@ app.layout = dbc.Container([
                        style={"color": "#666"}),
         ], md=9),
         dbc.Col([
-            html.Div("Powered by Monte Carlo + PRTS Risk Adjustment",
-                     style={"textAlign": "right", "color": "#888", "fontSize": "0.78rem", "paddingTop": "18px"}),
+            html.Div("💾 Save & Load Scenarios",
+                     style={"textAlign": "right", "color": "#888", "fontSize": "0.78rem", "paddingTop": "18px", "fontWeight": "600"}),
         ], md=3),
     ], className="py-3 mb-2", style={"borderBottom": "3px solid #1565C0"}),
 
     dcc.Store(id="store-results"),
+    dcc.Store(id="store-scenarios", data={}),
+    dcc.Download(id="download-export"),
 
     dbc.Row([
         dbc.Col(SIDEBAR, md=3),
@@ -404,6 +434,41 @@ def build_params(pop, price, pen, cogs, tax, lsw, lrw, p1, p2, p3, p4, upfront, 
     }
 
 
+# ── Update dropdown with saved scenarios ────────────────────────────────
+@app.callback(
+    Output("load-scenario-dropdown", "options"),
+    Input("store-scenarios", "data"),
+)
+def update_scenario_dropdown(scenarios_data):
+    if not scenarios_data:
+        return []
+    return [{"label": name, "value": name} for name in sorted(scenarios_data.keys())]
+
+
+# ── Load scenario when dropdown changes ──────────────────────────────────
+@app.callback(
+    Output("in-pop", "value"), Output("in-price", "value"), Output("in-pen", "value"),
+    Output("in-cogs", "value"), Output("in-tax", "value"), Output("in-lsw", "value"),
+    Output("in-lrw", "value"), Output("p1", "value"), Output("p2", "value"),
+    Output("p3", "value"), Output("p4", "value"), Output("in-upfront", "value"),
+    Output("in-mil", "value"), Output("scenario-name", "value"),
+    Input("btn-load", "n_clicks"),
+    State("load-scenario-dropdown", "value"),
+    State("store-scenarios", "data"),
+    prevent_initial_call=True,
+)
+def load_scenario(n_clicks, scenario_name, scenarios_data):
+    if not scenario_name or not scenarios_data or scenario_name not in scenarios_data:
+        return no_update
+    
+    s = scenarios_data[scenario_name]
+    return (
+        s["eu_pop"], s["price"], s["pen"], s["cogs"], s["tax"], s["lsw"],
+        s["lrw"], s["p1"], s["p2"], s["p3"], s["p4"], s["upfront"], s["mil"], scenario_name
+    )
+
+
+# ── Run Simulation ───────────────────────────────────────────────────────
 @app.callback(
     Output("store-results", "data"),
     Output("run-status", "children"),
@@ -474,6 +539,105 @@ def run_simulation(n_clicks, pop, price, pen, cogs, tax, lsw, lrw,
         f"Base eNPV: ${base['licensee_enpv']:.1f}M │ "
         f"P(>0): {ls_s['prob_pos']*100:.1f}%"
     )
+
+
+# ── Save Scenario ────────────────────────────────────────────────────────
+@app.callback(
+    Output("store-scenarios", "data"),
+    Output("save-status", "children"),
+    Input("btn-save", "n_clicks"),
+    State("scenario-name", "value"),
+    State("in-pop", "value"), State("in-price", "value"), State("in-pen", "value"),
+    State("in-cogs", "value"), State("in-tax", "value"), State("in-lsw", "value"),
+    State("in-lrw", "value"), State("p1", "value"), State("p2", "value"),
+    State("p3", "value"), State("p4", "value"), State("in-upfront", "value"),
+    State("in-mil", "value"), State("store-scenarios", "data"),
+    prevent_initial_call=True,
+)
+def save_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lrw,
+                  p1, p2, p3, p4, upfront, mil, scenarios_data):
+    if not scenario_name or scenario_name.strip() == "":
+        return scenarios_data or {}, "❌ Please enter a scenario name"
+    
+    scenario_name = scenario_name.strip()
+    scenarios = scenarios_data or {}
+    
+    scenarios[scenario_name] = {
+        "eu_pop": float(pop or 450),
+        "price": float(price or 15000),
+        "pen": float(pen or 5),
+        "cogs": float(cogs or 12),
+        "tax": float(tax or 21),
+        "lsw": float(lsw or 10),
+        "lrw": float(lrw or 14),
+        "p1": float(p1 or 63),
+        "p2": float(p2 or 30),
+        "p3": float(p3 or 58),
+        "p4": float(p4 or 90),
+        "upfront": float(upfront or 2),
+        "mil": float(mil or 1),
+        "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+    
+    return scenarios, f"✅ Saved: {scenario_name} ({len(scenarios)} scenario{'s' if len(scenarios) > 1 else ''})"
+
+
+# ── Delete Scenario ──────────────────────────────────────────────────────
+@app.callback(
+    Output("store-scenarios", "data"),
+    Output("save-status", "children"),
+    Input("btn-delete", "n_clicks"),
+    State("load-scenario-dropdown", "value"),
+    State("store-scenarios", "data"),
+    prevent_initial_call=True,
+)
+def delete_scenario(n_clicks, scenario_name, scenarios_data):
+    if not scenario_name or not scenarios_data or scenario_name not in scenarios_data:
+        return scenarios_data or {}, "❌ Select a scenario to delete"
+    
+    scenarios = {k: v for k, v in scenarios_data.items() if k != scenario_name}
+    return scenarios, f"🗑️ Deleted: {scenario_name}"
+
+
+# ── Export Scenario as JSON ──────────────────────────────────────────────
+@app.callback(
+    Output("download-export", "data"),
+    Input("btn-export", "n_clicks"),
+    State("scenario-name", "value"),
+    State("in-pop", "value"), State("in-price", "value"), State("in-pen", "value"),
+    State("in-cogs", "value"), State("in-tax", "value"), State("in-lsw", "value"),
+    State("in-lrw", "value"), State("p1", "value"), State("p2", "value"),
+    State("p3", "value"), State("p4", "value"), State("in-upfront", "value"),
+    State("in-mil", "value"), State("store-results", "data"),
+    prevent_initial_call=True,
+)
+def export_scenario(n_clicks, scenario_name, pop, price, pen, cogs, tax, lsw, lrw,
+                    p1, p2, p3, p4, upfront, mil, results):
+    if not scenario_name:
+        scenario_name = "Export"
+    
+    export_data = {
+        "scenario_name": scenario_name,
+        "exported_at": datetime.now().isoformat(),
+        "assumptions": {
+            "eu_pop": float(pop or 450),
+            "price": float(price or 15000),
+            "penetration": float(pen or 5),
+            "cogs_pct": float(cogs or 12),
+            "tax_rate": float(tax or 21),
+            "licensee_wacc": float(lsw or 10),
+            "licensor_wacc": float(lrw or 14),
+            "ph1_to_ph2": float(p1 or 63),
+            "ph2_to_ph3": float(p2 or 30),
+            "ph3_to_nda": float(p3 or 58),
+            "nda_approval": float(p4 or 90),
+            "upfront_payment": float(upfront or 2),
+            "milestones": float(mil or 1),
+        },
+        "results": results or {},
+    }
+    
+    return dcc.send_string(json.dumps(export_data, indent=2), f"{scenario_name}_NPV_Analysis.json")
 
 
 # ── KPI Cards ──────────────────────────────────────────────────────────
