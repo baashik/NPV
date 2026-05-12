@@ -1,5 +1,5 @@
 """
-GATX-11 Biopharma Licensing NPV Dashboard
+NPV Model
 Licensor (Biotech) ↔ Licensee (Pharma Partner) | EU Exclusive License
 """
 
@@ -273,7 +273,7 @@ def section_header(title, icon="📊"):
 app = Dash(
     __name__,
     external_stylesheets=[dbc.themes.FLATLY, dbc.icons.BOOTSTRAP],
-    title="GATX-11 Licensing NPV",
+    title="NPV Model",
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
 )
 server = app.server
