@@ -8,6 +8,7 @@ COLORS = {
     "muted": "#667085",
     "header": "#eef1f5",
     "blue": "#1f6feb",
+    "accent": "#1f6feb",
     "green": "#16833a",
     "red": "#b42318",
     "amber": "#b7791f",
