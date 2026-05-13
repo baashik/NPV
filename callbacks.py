@@ -183,18 +183,14 @@ def register_callbacks(app):
         [Input(cid, "value") for cid in assumption_input_ids],
         State("manual-overrides", "data"),
         State("sens-metric", "value"),
-        State("licensor-discount-rate", "value"),
-        State("licensee-wacc", "value"),
     )
     def update_dcf(
         *vals_and_states
     ):
-        state_count = 4
+        state_count = 2
         input_values = vals_and_states[:-state_count]
         overrides = vals_and_states[-state_count]
         sens_metric = vals_and_states[-state_count + 1]
-        licensor_dr = vals_and_states[-state_count + 2]
-        licensee_wacc = vals_and_states[-state_count + 3]
 
         # Build assumptions dict from inputs
         a = dict(DEFAULT_ASSUMPTIONS)
@@ -216,12 +212,10 @@ def register_callbacks(app):
                 a[key] = val
 
         a = clean_assumptions(a)
+        licensee_wacc = a.get("licensee_wacc", 10.0)
 
         # Build model
-        try:
-            model = build_dcf_model(a, overrides or {})
-        except Exception:
-            return no_update
+        model = build_dcf_model(a, overrides or {})
 
         summary = model["summary"]
         rows = model["frame"]
@@ -494,8 +488,8 @@ def register_callbacks(app):
         return s, f"Saved: {n}"
 
     @app.callback(
-        Output("saved-scenarios", "data"),
-        Output("scenario-status", "children"),
+        Output("saved-scenarios", "data", allow_duplicate=True),
+        Output("scenario-status", "children", allow_duplicate=True),
         Input("delete-scenario", "n_clicks"),
         State("scenario-dropdown", "value"),
         State("saved-scenarios", "data"),
