@@ -92,11 +92,19 @@ def register_callbacks(app):
         State("p1", "value"), State("p2", "value"),
         State("p3", "value"), State("p4", "value"),
         State("in-upfront", "value"), State("in-mil", "value"),
+        # License terms (available for future use)
+        State("in-dev-mil", "value"), State("in-reg-mil", "value"),
+        State("in-comm-mil", "value"), State("in-roy-tier1", "value"),
+        State("in-roy-tier2", "value"), State("in-roy-tier3", "value"),
+        State("in-tier1-thresh", "value"), State("in-tier2-thresh", "value"),
         State("sl-sims", "value"),
         prevent_initial_call=True,
     )
     def run_sim(n_clicks, pop, price, pen, cogs, tax, asset_dr, lsw, lrw,
-                p1, p2, p3, p4, upfront, mil, n_sims):
+                p1, p2, p3, p4, upfront, mil,
+                dev_mil, reg_mil, comm_mil, roy_tier1, roy_tier2, roy_tier3,
+                tier1_thresh, tier2_thresh, n_sims):
+        # License terms currently not used in calculation
         params = build_params(pop, price, pen, cogs, tax,
                               asset_dr, lsw, lrw,
                               p1, p2, p3, p4, upfront, mil)
@@ -149,11 +157,18 @@ def register_callbacks(app):
         State("p1", "value"), State("p2", "value"),
         State("p3", "value"), State("p4", "value"),
         State("in-upfront", "value"), State("in-mil", "value"),
+        # License terms (available for future use)
+        State("in-dev-mil", "value"), State("in-reg-mil", "value"),
+        State("in-comm-mil", "value"), State("in-roy-tier1", "value"),
+        State("in-roy-tier2", "value"), State("in-roy-tier3", "value"),
+        State("in-tier1-thresh", "value"), State("in-tier2-thresh", "value"),
         State("store-scenarios", "data"),
         prevent_initial_call=True,
     )
     def save_scenario(n_clicks, name, pop, price, pen, cogs, tax,
-                      asset_dr, lsw, lrw, p1, p2, p3, p4, upfront, mil, data):
+                      asset_dr, lsw, lrw, p1, p2, p3, p4, upfront, mil,
+                      dev_mil, reg_mil, comm_mil, roy_tier1, roy_tier2, roy_tier3,
+                      tier1_thresh, tier2_thresh, data):
         if not name or not name.strip():
             return data or {}, "❌ Enter a name"
         n = name.strip()
@@ -166,6 +181,15 @@ def register_callbacks(app):
             "p1": float(p1 or 63), "p2": float(p2 or 30),
             "p3": float(p3 or 58), "p4": float(p4 or 90),
             "upfront": float(upfront or 2), "mil": float(mil or 1),
+            # License terms saved for future use
+            "dev_mil": float(dev_mil or 1),
+            "reg_mil": float(reg_mil or 2),
+            "comm_mil": float(comm_mil or 0),
+            "roy_tier1": float(roy_tier1 or 5),
+            "roy_tier2": float(roy_tier2 or 7),
+            "roy_tier3": float(roy_tier3 or 9),
+            "tier1_thresh": float(tier1_thresh or 100),
+            "tier2_thresh": float(tier2_thresh or 200),
             "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         return s, f"✅ Saved: {n}"
@@ -194,11 +218,18 @@ def register_callbacks(app):
         State("p1", "value"), State("p2", "value"),
         State("p3", "value"), State("p4", "value"),
         State("in-upfront", "value"), State("in-mil", "value"),
+        # License terms (available for future use)
+        State("in-dev-mil", "value"), State("in-reg-mil", "value"),
+        State("in-comm-mil", "value"), State("in-roy-tier1", "value"),
+        State("in-roy-tier2", "value"), State("in-roy-tier3", "value"),
+        State("in-tier1-thresh", "value"), State("in-tier2-thresh", "value"),
         State("store-results", "data"),
         prevent_initial_call=True,
     )
     def export(n_clicks, name, pop, price, pen, cogs, tax, asset_dr, lsw, lrw,
-               p1, p2, p3, p4, upfront, mil, results):
+               p1, p2, p3, p4, upfront, mil,
+               dev_mil, reg_mil, comm_mil, roy_tier1, roy_tier2, roy_tier3,
+               tier1_thresh, tier2_thresh, results):
         n = name or "Export"
         d = {
             "scenario_name": n, "exported_at": datetime.now().isoformat(),
@@ -213,6 +244,15 @@ def register_callbacks(app):
                 "ph2_to_ph3": float(p2 or 30), "ph3_to_nda": float(p3 or 58),
                 "nda_approval": float(p4 or 90), "upfront": float(upfront or 2),
                 "milestones": float(mil or 1),
+                # License terms (for future use)
+                "dev_milestone": float(dev_mil or 1),
+                "reg_milestone": float(reg_mil or 2),
+                "comm_milestone": float(comm_mil or 0),
+                "royalty_tier_1_rate": float(roy_tier1 or 5),
+                "royalty_tier_2_rate": float(roy_tier2 or 7),
+                "royalty_tier_3_rate": float(roy_tier3 or 9),
+                "royalty_tier_1_threshold": float(tier1_thresh or 100),
+                "royalty_tier_2_threshold": float(tier2_thresh or 200),
             },
             "results": results or {},
         }
