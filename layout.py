@@ -110,6 +110,7 @@ def assumption_panel():
                             section_title("Tax / Discount"),
                             field("Tax Rate", number_input("tax-rate", a["tax_rate"], 0.5)),
                             field("Asset / Project WACC", number_input("wacc", a["wacc"], 0.5)),
+                            field("Licensee Discount Rate", number_input("licensee-discount-rate", a["licensee_discount_rate"], 0.5)),
                             section_title("Phase Success Rates"),
                             field("Phase I Success Rate", number_input("phase-i-success", a["phase_i_success"], 0.5)),
                             field("Phase II Success Rate", number_input("phase-ii-success", a["phase_ii_success"], 0.5)),
@@ -129,11 +130,14 @@ def assumption_panel():
 
 def summary_cards():
     cards = [
-        ("rNPV", "summary-rnpv"),
-        ("Undiscounted FCF", "summary-fcf"),
+        ("Asset rNPV", "summary-rnpv"),
+        ("Licensee eNPV", "summary-licensee-enpv"),
+        ("Licensor NPV", "summary-licensor-npv"),
         ("Peak Revenue", "summary-peak-revenue"),
         ("Peak Patients", "summary-peak-patients"),
-        ("WACC", "summary-wacc"),
+        ("Asset WACC", "summary-wacc"),
+        ("Licensee Rate", "summary-licensee-rate"),
+        ("Licensor Rate", "summary-licensor-rate"),
         ("Probability to Approval", "summary-approval-prob"),
         ("Launch Year", "summary-launch-year"),
         ("Tax Rate", "summary-tax-rate"),
@@ -200,17 +204,28 @@ def charts_panel():
     )
 
 
+def sensitivity_panel():
+    return html.Div(
+        [
+            html.H5("Sensitivity / Tornado", style={"fontWeight": "800", "marginBottom": "8px"}),
+            dcc.Graph(id="tornado-chart", config={"displayModeBar": False}),
+        ],
+        style={**CARD, "padding": "12px", "marginTop": "18px"},
+    )
+
+
 def dcf_page():
-    return html.Div([assumption_panel(), summary_cards(), dcf_table(), charts_panel()])
+    return html.Div([assumption_panel(), summary_cards(), dcf_table(), charts_panel(), sensitivity_panel()])
 
 
 def licensor_page():
+    a = DEFAULT_ASSUMPTIONS
     return html.Div(
         [
             html.Div(
                 [
                     html.H4("Licensor Model", style={"fontWeight": "800"}),
-                    html.Div("Structured placeholder for deal economics. We can connect it to DCF cash flows next.", style={"color": COLORS["muted"]}),
+                    html.Div("Deal economics connected to the DCF forecast: upfronts, milestones, tiered royalties, and licensor NPV.", style={"color": COLORS["muted"]}),
                 ],
                 style={"marginBottom": "16px"},
             ),
@@ -220,28 +235,37 @@ def licensor_page():
                         html.Div(
                             [
                                 section_title("Inputs"),
-                                field("Upfront Payment (M)", number_input("lic-upfront", 0, 1)),
-                                field("Development Milestones (M)", number_input("lic-dev-ms", 0, 1)),
-                                field("Regulatory Milestones (M)", number_input("lic-reg-ms", 0, 1)),
-                                field("Commercial Milestones (M)", number_input("lic-com-ms", 0, 1)),
-                                field("Royalty Rate", number_input("lic-royalty", 0, 0.5)),
-                                field("Royalty Start Year", number_input("lic-royalty-start", 2032, 1)),
-                                field("Royalty End Year", number_input("lic-royalty-end", 2042, 1)),
-                                field("Licensor Discount Rate", number_input("lic-discount", 14, 0.5)),
+                                field("Upfront Payment (M)", number_input("upfront-payment", a["upfront_payment"], 1)),
+                                field("Development Milestones (M)", number_input("development-milestones", a["development_milestones"], 1)),
+                                field("Regulatory Milestones (M)", number_input("regulatory-milestones", a["regulatory_milestones"], 1)),
+                                field("Commercial Milestones (M)", number_input("commercial-milestones", a["commercial_milestones"], 1)),
+                                field("Royalty Rate", number_input("royalty-rate", a["royalty_rate"], 0.5)),
+                                field("Tier 1 Royalty: first $100M", number_input("royalty-tier-1-rate", a["royalty_tier_1_rate"], 0.5)),
+                                field("Tier 2 Royalty: $100M-$200M", number_input("royalty-tier-2-rate", a["royalty_tier_2_rate"], 0.5)),
+                                field("Tier 3 Royalty: above $200M", number_input("royalty-tier-3-rate", a["royalty_tier_3_rate"], 0.5)),
+                                field("Royalty Start Year", number_input("royalty-start-year", a["royalty_start_year"], 1)),
+                                field("Royalty End Year", number_input("royalty-end-year", a["royalty_end_year"], 1)),
+                                field("Licensor Discount Rate", number_input("licensor-discount-rate", a["licensor_discount_rate"], 0.5)),
                             ],
                             style={**CARD, "padding": "18px"},
                         ),
                         lg=4,
                     ),
                     dbc.Col(
-                        dbc.Row(
+                        html.Div(
                             [
-                                dbc.Col(html.Div([html.Div("Licensor NPV", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                dbc.Col(html.Div([html.Div("Total Milestones", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                dbc.Col(html.Div([html.Div("Total Royalties", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                dbc.Col(html.Div([html.Div("Total Deal Value", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                            ],
-                            className="g-3",
+                                dbc.Row(
+                                    [
+                                        dbc.Col(html.Div([html.Div("Licensor NPV", style=SMALL_LABEL), html.H4(id="licensor-npv")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Total Milestones", style=SMALL_LABEL), html.H4(id="licensor-total-milestones")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Total Royalties", style=SMALL_LABEL), html.H4(id="licensor-total-royalties")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Total Deal Value", style=SMALL_LABEL), html.H4(id="licensor-total-deal-value")], style={**CARD, "padding": "18px"}), md=6),
+                                    ],
+                                    className="g-3",
+                                ),
+                                html.Div(dcc.Graph(id="licensor-bridge-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px", "marginTop": "16px"}),
+                                html.Div(dcc.Graph(id="licensor-cashflow-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px", "marginTop": "16px"}),
+                            ]
                         ),
                         lg=8,
                     ),
@@ -258,7 +282,7 @@ def monte_carlo_page():
             html.Div(
                 [
                     html.H4("Monte Carlo", style={"fontWeight": "800"}),
-                    html.Div("Structured placeholder for stochastic valuation. Deterministic DCF is live in the first tab.", style={"color": COLORS["muted"]}),
+                    html.Div("Live simulation using WACC, penetration, price, probability, and development cost distributions.", style={"color": COLORS["muted"]}),
                 ],
                 style={"marginBottom": "16px"},
             ),
@@ -284,25 +308,16 @@ def monte_carlo_page():
                             [
                                 dbc.Row(
                                     [
-                                        dbc.Col(html.Div([html.Div("Mean rNPV", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                        dbc.Col(html.Div([html.Div("Median rNPV", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                        dbc.Col(html.Div([html.Div("P10 / P90", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
-                                        dbc.Col(html.Div([html.Div("Probability rNPV > 0", style=SMALL_LABEL), html.H4("—")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Mean rNPV", style=SMALL_LABEL), html.H4(id="mc-mean-rnpv")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Median rNPV", style=SMALL_LABEL), html.H4(id="mc-median-rnpv")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("P10 / P90", style=SMALL_LABEL), html.H4(id="mc-p10-p90")], style={**CARD, "padding": "18px"}), md=6),
+                                        dbc.Col(html.Div([html.Div("Probability rNPV > 0", style=SMALL_LABEL), html.H4(id="mc-prob-positive")], style={**CARD, "padding": "18px"}), md=6),
                                     ],
                                     className="g-3",
                                 ),
                                 html.Div(
-                                    "Histogram placeholder",
-                                    style={
-                                        **CARD,
-                                        "height": "250px",
-                                        "marginTop": "16px",
-                                        "display": "flex",
-                                        "alignItems": "center",
-                                        "justifyContent": "center",
-                                        "color": COLORS["muted"],
-                                        "fontWeight": "700",
-                                    },
+                                    dcc.Graph(id="mc-histogram-chart", config={"displayModeBar": False}),
+                                    style={**CARD, "padding": "10px", "marginTop": "16px"},
                                 ),
                             ]
                         ),
@@ -343,17 +358,56 @@ def sidebar():
     )
 
 
+def scenario_bar():
+    return html.Div(
+        dbc.Row(
+            [
+                dbc.Col(field("Scenario", dbc.Input(id="scenario-name", value="Base Case", size="sm")), lg=3, md=6),
+                dbc.Col(
+                    field(
+                        "Load Saved",
+                        dcc.Dropdown(id="scenario-dropdown", options=[], placeholder="Select saved scenario", style={"fontSize": "0.86rem"}),
+                    ),
+                    lg=3,
+                    md=6,
+                ),
+                dbc.Col(
+                    html.Div(
+                        [
+                            dbc.Button("Save", id="save-scenario", color="primary", size="sm"),
+                            dbc.Button("Load", id="load-scenario", color="secondary", outline=True, size="sm"),
+                            dbc.Button("Delete", id="delete-scenario", color="danger", outline=True, size="sm"),
+                            dbc.Button("Export", id="export-scenario", color="success", outline=True, size="sm"),
+                        ],
+                        style={"display": "flex", "gap": "8px", "alignItems": "end", "height": "100%"},
+                    ),
+                    lg=4,
+                    md=8,
+                ),
+                dbc.Col(html.Div(id="scenario-status", style={"fontSize": "0.82rem", "color": COLORS["muted"], "paddingTop": "24px"}), lg=2, md=4),
+            ],
+            className="g-2 align-items-end",
+        ),
+        style={**CARD, "padding": "14px 16px", "marginBottom": "18px"},
+    )
+
+
 def build_layout():
     return html.Div(
         [
             dcc.Store(id="active-page", data="dcf"),
             dcc.Store(id="manual-overrides", data={}),
             dcc.Store(id="last-table-data", data=[]),
+            dcc.Store(id="saved-scenarios", data={}),
+            dcc.Store(id="model-summary-store", data={}),
+            dcc.Store(id="simulation-results-store", data={}),
+            dcc.Download(id="download-export"),
             html.Div(
                 [
                     sidebar(),
                     html.Main(
                         [
+                            scenario_bar(),
                             html.Div(
                                 [
                                     html.Div(

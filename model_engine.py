@@ -18,6 +18,7 @@ SECTION_ROWS = {
     "market_build": "MARKET BUILD",
     "profit_loss": "PROFIT & LOSS",
     "ptrs": "PRTS RISK ADJUSTMENT",
+    "licensing": "LICENSING ECONOMICS",
     "valuation": "VALUATION SUMMARY",
 }
 
@@ -52,8 +53,15 @@ ROW_DEFS = [
     ("risk_adjusted_cf", "Risk-Adjusted Cash Flow (M)", "currency", False),
     ("discount_factor", "Discount Factor (WACC)", "factor", True),
     ("discounted_fcf", "Discounted FCF – eNPV (M)", "currency", False),
+    ("section_licensing", "LICENSING ECONOMICS", "section", False),
+    ("royalty_paid", "Royalty Payments (M)", "currency", False),
+    ("milestone_payments", "Milestone Payments (M)", "currency", False),
+    ("licensee_risk_adjusted_cf", "Licensee Risk-Adjusted CF (M)", "currency", False),
+    ("licensor_cash_flow", "Licensor Cash Flow (M)", "currency", False),
     ("section_valuation", "VALUATION SUMMARY", "section", False),
     ("rnpv", "rNPV (risk-adjusted, M)", "currency", False),
+    ("licensee_enpv", "Licensee eNPV (M)", "currency", False),
+    ("licensor_npv", "Licensor NPV (M)", "currency", False),
     ("discount_rate", "Discount Rate (WACC)", "pct", True),
 ]
 
@@ -84,11 +92,25 @@ DEFAULT_ASSUMPTIONS = {
     "pre_marketing": 15.0,
     "tax_rate": 21.00,
     "wacc": 12.00,
+    "licensee_discount_rate": 12.00,
+    "licensor_discount_rate": 14.00,
     "phase_i_success": 65.00,
     "phase_ii_success": 40.00,
     "phase_iii_success": 60.00,
     "approval_success": 85.00,
+    "upfront_payment": 5.0,
+    "development_milestones": 25.0,
+    "regulatory_milestones": 50.0,
+    "commercial_milestones": 75.0,
+    "royalty_rate": 8.0,
+    "royalty_tier_1_rate": 5.0,
+    "royalty_tier_2_rate": 7.0,
+    "royalty_tier_3_rate": 9.0,
+    "royalty_start_year": 2032,
+    "royalty_end_year": 2042,
 }
+
+ROYALTY_TIER_BREAKS = (100.0, 200.0)
 
 
 @dataclass(frozen=True)
@@ -106,11 +128,63 @@ def clean_assumptions(values: dict[str, Any]) -> dict[str, Any]:
     clean["start_year"] = int(clean["start_year"])
     clean["forecast_years"] = max(1, min(int(clean["forecast_years"]), 30))
     clean["launch_year"] = int(clean["launch_year"])
+    clean["royalty_start_year"] = int(clean["royalty_start_year"])
+    clean["royalty_end_year"] = int(clean["royalty_end_year"])
     return clean
 
 
 def _pct(value: float) -> float:
     return float(value) / 100.0
+
+
+def _discount_factors(rate: float, n_periods: int) -> list[float]:
+    return [1 / ((1 + rate) ** (i + 1)) for i in range(n_periods)]
+
+
+def royalty_tiers_from_assumptions(assumptions: dict[str, Any]) -> list[tuple[float, float, float]]:
+    """Build simple revenue tiers: 0-100M, 100-200M, and 200M+."""
+    first_break, second_break = ROYALTY_TIER_BREAKS
+    return [
+        (0.0, first_break, _pct(assumptions["royalty_tier_1_rate"])),
+        (first_break, second_break, _pct(assumptions["royalty_tier_2_rate"])),
+        (second_break, float("inf"), _pct(assumptions["royalty_tier_3_rate"])),
+    ]
+
+
+def compute_tiered_royalty(revenue_m: float, tiers: list[tuple[float, float, float]]) -> float:
+    royalty = 0.0
+    for lower, upper, rate in tiers:
+        if revenue_m <= lower:
+            continue
+        tier_revenue = min(revenue_m, upper) - lower
+        royalty += tier_revenue * rate
+    return royalty
+
+
+def build_milestone_schedule(assumptions: dict[str, Any], years: list[int]) -> list[float]:
+    """Spread aggregate milestone assumptions over simple phase/event years."""
+    schedule = [0.0 for _ in years]
+    n = len(years)
+    if not years:
+        return schedule
+
+    schedule[0] += float(assumptions["upfront_payment"])
+
+    development = float(assumptions["development_milestones"])
+    for index in (2, 4):
+        if index < n:
+            schedule[index] += development / 2
+
+    if 7 < n:
+        schedule[7] += float(assumptions["regulatory_milestones"])
+
+    launch_plus_two = assumptions["royalty_start_year"] + 2
+    if launch_plus_two in years:
+        schedule[years.index(launch_plus_two)] += float(assumptions["commercial_milestones"])
+    elif n:
+        schedule[-1] += float(assumptions["commercial_milestones"])
+
+    return schedule
 
 
 def _override(overrides: dict[str, Any], row_key: str, index: int, default: float) -> float:
@@ -284,16 +358,21 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
     for i, year in enumerate(years):
         phase = _phase_for_index(i, year, a["launch_year"])
         if phase == "phase_i":
-            sr, cpos = p1, p1 * p2 * p3 * p4
+            sr = _override(overrides, "success_rate", i, p1)
+            cpos = sr * p2 * p3 * p4
         elif phase == "phase_ii":
-            sr, cpos = p2, p2 * p3 * p4
+            sr = _override(overrides, "success_rate", i, p2)
+            cpos = sr * p3 * p4
         elif phase == "phase_iii":
-            sr, cpos = p3, p3 * p4
+            sr = _override(overrides, "success_rate", i, p3)
+            cpos = sr * p4
         elif phase == "approval":
-            sr, cpos = p4, p4
+            sr = _override(overrides, "success_rate", i, p4)
+            cpos = sr
         else:
-            sr, cpos = 1.0, 1.0
-        success_rate.append(_override(overrides, "success_rate", i, sr))
+            sr = _override(overrides, "success_rate", i, 1.0)
+            cpos = sr
+        success_rate.append(sr)
         cumulative_pos.append(cpos)
 
     discount_rate = [_override(overrides, "discount_rate", i, _pct(a["wacc"])) for i in range(n)]
@@ -305,6 +384,41 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
     discounted_fcf = [risk_adjusted_cf[i] * discount_factor[i] for i in range(n)]
     rnpv_value = float(np.sum(discounted_fcf))
 
+    tiers = royalty_tiers_from_assumptions(a)
+    royalty_paid = []
+    for i, year in enumerate(years):
+        if a["royalty_start_year"] <= year <= a["royalty_end_year"]:
+            royalty_paid.append(compute_tiered_royalty(revenue[i], tiers))
+        else:
+            royalty_paid.append(0.0)
+
+    milestone_payments = build_milestone_schedule(a, years)
+    licensee_cash_flow = [
+        free_cash_flow[i] - royalty_paid[i] - milestone_payments[i]
+        for i in range(n)
+    ]
+    licensee_risk_adjusted_cf = [
+        licensee_cash_flow[i] if i == 0 else licensee_cash_flow[i] * cumulative_pos[i]
+        for i in range(n)
+    ]
+    licensor_cash_flow = [
+        milestone_payments[i] if i == 0 else (royalty_paid[i] + milestone_payments[i]) * cumulative_pos[i]
+        for i in range(n)
+    ]
+
+    licensee_discount_factor = _discount_factors(_pct(a["licensee_discount_rate"]), n)
+    licensor_discount_factor = _discount_factors(_pct(a["licensor_discount_rate"]), n)
+    licensee_discounted_cf = [
+        licensee_risk_adjusted_cf[i] * licensee_discount_factor[i]
+        for i in range(n)
+    ]
+    licensor_discounted_cf = [
+        licensor_cash_flow[i] * licensor_discount_factor[i]
+        for i in range(n)
+    ]
+    licensee_enpv = float(np.sum(licensee_discounted_cf))
+    licensor_npv = float(np.sum(licensor_discounted_cf))
+
     rows.update(
         {
             "success_rate": success_rate,
@@ -312,7 +426,18 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
             "risk_adjusted_cf": risk_adjusted_cf,
             "discount_factor": discount_factor,
             "discounted_fcf": discounted_fcf,
+            "royalty_paid": royalty_paid,
+            "milestone_payments": milestone_payments,
+            "licensee_cash_flow": licensee_cash_flow,
+            "licensee_risk_adjusted_cf": licensee_risk_adjusted_cf,
+            "licensee_discount_factor": licensee_discount_factor,
+            "licensee_discounted_cf": licensee_discounted_cf,
+            "licensor_cash_flow": licensor_cash_flow,
+            "licensor_discount_factor": licensor_discount_factor,
+            "licensor_discounted_cf": licensor_discounted_cf,
             "rnpv": [rnpv_value] + [""] * (n - 1),
+            "licensee_enpv": [licensee_enpv] + [""] * (n - 1),
+            "licensor_npv": [licensor_npv] + [""] * (n - 1),
             "discount_rate": discount_rate,
         }
     )
@@ -327,10 +452,18 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
 
     summary = {
         "rnpv": rnpv_value,
+        "licensee_enpv": licensee_enpv,
+        "licensor_npv": licensor_npv,
         "undiscounted_fcf": float(np.sum(free_cash_flow)),
+        "licensee_undiscounted_fcf": float(np.sum(licensee_cash_flow)),
+        "total_royalties": float(np.sum(royalty_paid)),
+        "total_milestones": float(np.sum(milestone_payments)),
+        "total_deal_value": float(np.sum(royalty_paid) + np.sum(milestone_payments)),
         "peak_revenue": float(np.max(revenue)) if revenue else 0.0,
         "peak_patients": float(np.max(patients_treated)) if patients_treated else 0.0,
         "wacc": _pct(a["wacc"]),
+        "licensee_discount_rate": _pct(a["licensee_discount_rate"]),
+        "licensor_discount_rate": _pct(a["licensor_discount_rate"]),
         "approval_probability": p1 * p2 * p3 * p4,
         "launch_year": a["launch_year"],
         "tax_rate": _pct(a["tax_rate"]),

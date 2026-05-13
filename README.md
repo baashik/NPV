@@ -10,7 +10,7 @@ pinned: false
 
 # Biopharma Licensing Valuation Platform
 
-A Dash web app for modeling a **biopharma licensing deal** using a modular DCF, risk-adjusted NPV, and future licensing / Monte Carlo workflows.
+A Dash web app for modeling a **biopharma licensing deal** using a modular DCF, risk-adjusted NPV, tiered royalties, licensor economics, and Monte Carlo simulation.
 
 ## Deal setup
 
@@ -27,23 +27,26 @@ This app models the following transaction:
 The app estimates:
 
 - Deterministic risk-adjusted rNPV
+- Licensee eNPV after licensing payments
+- Licensor NPV from upfront, milestones, and royalties
 - Annual patient, revenue, cost, FCF, and discounted cash flow outputs
 - Peak revenue and treated patient metrics
 - Probability-adjusted development cash flows
-- Modular placeholders for licensor economics and Monte Carlo simulation
+- Monte Carlo NPV distributions
+- Tornado / sensitivity analysis
 
 ## App structure
 
 The app is designed in 3 sections:
 
 1. **Assumptions + DCF**  
-   Edit commercial, financial, tax, WACC, and phase-success assumptions; review the live DCF table.
+   Edit commercial, financial, tax, WACC, and phase-success assumptions; review the live DCF table, summary cards, charts, and tornado analysis.
 
 2. **Licensor Model**  
-   Structured placeholder for upfront payments, milestones, royalties, and licensor value.
+   Model upfront payments, milestones, tiered royalties, licensor NPV, and licensor cash flow bridge.
 
 3. **Monte Carlo**  
-   Structured placeholder for stochastic model inputs and simulation outputs.
+   Run stochastic valuation across WACC, price, penetration, probability of success, and development cost ranges.
 
 ## Core model inputs
 
@@ -63,6 +66,7 @@ The assumptions can include items such as:
 - Licensor WACC
 - Upfront payment
 - Milestones
+- Tiered royalty rates
 - Number of Monte Carlo simulations
 
 ## Technical setup
