@@ -148,12 +148,13 @@ def _discount_factors(rate: float, n_periods: int) -> list[float]:
 
 
 def royalty_tiers_from_assumptions(assumptions: dict[str, Any]) -> list[tuple[float, float, float]]:
-    """Build simple revenue tiers: 0-100M, 100-200M, and 200M+."""
-    first_break, second_break = ROYALTY_TIER_BREAKS
+    """Build revenue tiers with configurable thresholds."""
+    t1 = assumptions.get("royalty_tier_1_threshold", 100.0)
+    t2 = assumptions.get("royalty_tier_2_threshold", 200.0)
     return [
-        (0.0, first_break, _pct(assumptions["royalty_tier_1_rate"])),
-        (first_break, second_break, _pct(assumptions["royalty_tier_2_rate"])),
-        (second_break, float("inf"), _pct(assumptions["royalty_tier_3_rate"])),
+        (0.0, t1, _pct(assumptions["royalty_tier_1_rate"])),
+        (t1, t2, _pct(assumptions["royalty_tier_2_rate"])),
+        (t2, float("inf"), _pct(assumptions["royalty_tier_3_rate"])),
     ]
 
 
@@ -168,27 +169,34 @@ def compute_tiered_royalty(revenue_m: float, tiers: list[tuple[float, float, flo
 
 
 def build_milestone_schedule(assumptions: dict[str, Any], years: list[int]) -> list[float]:
-    """Spread aggregate milestone assumptions over simple phase/event years."""
+    """Spread milestone assumptions over relevant years."""
     schedule = [0.0 for _ in years]
     n = len(years)
     if not years:
         return schedule
 
-    schedule[0] += float(assumptions["upfront_payment"])
+    launch_year = assumptions.get("launch_year", 2033)
+    start_year = assumptions.get("start_year", 2026)
 
-    development = float(assumptions["development_milestones"])
-    for index in (2, 4):
-        if index < n:
-            schedule[index] += development / 2
+    # Upfront payment at year 0
+    schedule[0] += float(assumptions.get("upfront_payment", 0))
 
-    if 7 < n:
-        schedule[7] += float(assumptions["regulatory_milestones"])
+    # Development milestone at year 2 (Ph2 completion)
+    dev_milestone = float(assumptions.get("development_milestone", 0))
+    if 2 < n:
+        schedule[2] += dev_milestone
 
-    launch_plus_two = assumptions["royalty_start_year"] + 2
-    if launch_plus_two in years:
-        schedule[years.index(launch_plus_two)] += float(assumptions["commercial_milestones"])
-    elif n:
-        schedule[-1] += float(assumptions["commercial_milestones"])
+    # Regulatory milestone at approval year (year 7 / 2033)
+    reg_milestone = float(assumptions.get("regulatory_milestone", 0))
+    approval_idx = launch_year - start_year
+    if approval_idx < n:
+        schedule[approval_idx] += reg_milestone
+
+    # Commercial milestone at launch + 1 year
+    comm_milestone = float(assumptions.get("commercial_milestone", 0))
+    comm_idx = launch_year - start_year + 1
+    if comm_idx < n:
+        schedule[comm_idx] += comm_milestone
 
     return schedule
 
@@ -423,16 +431,77 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
 
     licensee_discount_factor = _discount_factors(_pct(a["licensee_wacc"]), n)
     licensor_discount_factor = _discount_factors(_pct(a["licensor_discount_rate"]), n)
+
+    # ===== LICENSOR CALCULATIONS =====
+    # Because this is a Phase I asset:
+    # - Upfront (year 0): no probability adjustment (received immediately)
+    # - Development milestone (year 2): risk-adjusted by Ph2→Ph3→Approval
+    # - Regulatory milestone (approval year): risk-adjusted by full cumulative POS
+    # - Commercial milestone (launch+1): risk-adjusted by full cumulative POS
+    # - Royalties: risk-adjusted by full cumulative POS
+
+    # Calculate probability factors for each milestone type
+    p2_to_approval = p3 * p4  # Ph2 → Ph3 → Approval
+    full_prob = p1 * p2 * p3 * p4  # Full cumulative probability
+
+    upfront_income = [milestone_payments[0]] + [0.0] * (n - 1)
+    dev_milestone_income = [0.0] * n
+    if 2 < n:
+        dev_milestone_income[2] = milestone_payments[2]
+
+    reg_milestone_income = [0.0] * n
+    comm_milestone_income = [0.0] * n
+    launch_idx = a["launch_year"] - a["start_year"]
+    if launch_idx < n:
+        # Regulatory at approval year (same as launch year)
+        reg_milestone_income[launch_idx] = float(a.get("regulatory_milestone", 0))
+        # Commercial at launch + 1
+        if launch_idx + 1 < n:
+            comm_milestone_income[launch_idx + 1] = float(a.get("commercial_milestone", 0))
+
+    royalty_income = royalty_paid.copy()
+
+    # Calculate raw licensor cash flow
+    licensor_cf_raw = [
+        upfront_income[i] + dev_milestone_income[i] + reg_milestone_income[i] +
+        comm_milestone_income[i] + royalty_income[i]
+        for i in range(n)
+    ]
+
+    # Risk-adjusted licensor cash flow
+    risk_adj_licensor_cf = []
+    for i in range(n):
+        if i == 0:
+            # Year 0: upfront has no risk adjustment
+            risk_adj = upfront_income[0]
+        elif i == 2:
+            # Year 2: development milestone risk-adjusted by Ph2→Approval
+            risk_adj = dev_milestone_income[2] * p2_to_approval
+        elif i == launch_idx:
+            # Approval year: regulatory milestone risk-adjusted
+            risk_adj = reg_milestone_income[launch_idx] * full_prob
+        elif i == launch_idx + 1 and launch_idx + 1 < n:
+            # Launch+1: commercial milestone risk-adjusted
+            risk_adj = comm_milestone_income[launch_idx + 1] * full_prob
+        else:
+            # Royalties and other years: risk-adjusted by full cumulative probability
+            risk_adj = (royalty_income[i] + dev_milestone_income[i] +
+                       reg_milestone_income[i] + comm_milestone_income[i]) * cumulative_pos[i]
+        risk_adj_licensor_cf.append(risk_adj)
+
+    # Discounted licensor cash flow
+    discounted_licensor_cf = [
+        risk_adj_licensor_cf[i] * licensor_discount_factor[i]
+        for i in range(n)
+    ]
+
+    licensor_npv = float(np.sum(discounted_licensor_cf))
+
     licensee_discounted_cf = [
         licensee_risk_adjusted_cf[i] * licensee_discount_factor[i]
         for i in range(n)
     ]
-    licensor_discounted_cf = [
-        licensor_cash_flow[i] * licensor_discount_factor[i]
-        for i in range(n)
-    ]
     licensee_enpv = float(np.sum(licensee_discounted_cf))
-    licensor_npv = float(np.sum(licensor_discounted_cf))
 
     rows.update(
         {
@@ -447,9 +516,16 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
             "licensee_risk_adjusted_cf": licensee_risk_adjusted_cf,
             "licensee_discount_factor": licensee_discount_factor,
             "licensee_discounted_cf": licensee_discounted_cf,
-            "licensor_cash_flow": licensor_cash_flow,
+            # Licensor rows
+            "upfront_income": upfront_income,
+            "development_milestone_income": dev_milestone_income,
+            "regulatory_milestone_income": reg_milestone_income,
+            "commercial_milestone_income": comm_milestone_income,
+            "royalty_income": royalty_income,
+            "licensor_cash_flow": licensor_cf_raw,
+            "risk_adj_licensor_cash_flow": risk_adj_licensor_cf,
             "licensor_discount_factor": licensor_discount_factor,
-            "licensor_discounted_cf": licensor_discounted_cf,
+            "discounted_licensor_cf": discounted_licensor_cf,
             "rnpv": [rnpv_value] + [""] * (n - 1),
             "licensee_enpv": [licensee_enpv] + [""] * (n - 1),
             "licensor_npv": [licensor_npv] + [""] * (n - 1),
@@ -471,9 +547,18 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
         "licensor_npv": licensor_npv,
         "undiscounted_fcf": float(np.sum(free_cash_flow)),
         "licensee_undiscounted_fcf": float(np.sum(licensee_cash_flow)),
+        # Licensee totals
         "total_royalties": float(np.sum(royalty_paid)),
         "total_milestones": float(np.sum(milestone_payments)),
-        "total_deal_value": float(np.sum(royalty_paid) + np.sum(milestone_payments)),
+        "total_deal_value": float(np.sum(royalty_paid) + float(np.sum(milestone_payments)) + float(a.get("upfront_payment", 0))),
+        # Licensor-specific totals
+        "licensor_total_upfront": float(a.get("upfront_payment", 0)),
+        "licensor_total_dev_milestone": float(a.get("development_milestone", 0)),
+        "licensor_total_reg_milestone": float(a.get("regulatory_milestone", 0)),
+        "licensor_total_comm_milestone": float(a.get("commercial_milestone", 0)),
+        "licensor_total_royalties": float(np.sum(royalty_income)),
+        "licensor_total_milestones": float(np.sum(upfront_income) + np.sum(dev_milestone_income) +
+                                           np.sum(reg_milestone_income) + np.sum(comm_milestone_income)),
         "peak_revenue": float(np.max(revenue)) if revenue else 0.0,
         "peak_patients": float(np.max(patients_treated)) if patients_treated else 0.0,
         "asset_discount_rate": _pct(a["asset_discount_rate"]),

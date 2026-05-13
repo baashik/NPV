@@ -176,6 +176,20 @@ def mc_page():
 def bridge_page():
     return html.Div([
         summary_cards(),
+        dbc.Row([
+            dbc.Col(html.Div([html.Div("Licensor NPV", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensor-npv", style={"fontWeight": "800", "color": COLORS["teal"]})],
+                     style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Total Milestones", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensor-total-milestones")],
+                     style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Total Royalties", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensor-total-royalties")],
+                     style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Total Deal Value", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensor-total-deal-value")],
+                     style={**CARD, "padding": "14px"}), md=3),
+        ], className="g-2 mb-3"),
         html.Div([
             dbc.Card(dbc.CardBody(dcc.Graph(id="bridge-chart", config={"displayModeBar": False})),
                      style={**CARD, "padding": "8px", "marginBottom": "14px"}),

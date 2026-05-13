@@ -9,9 +9,149 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
 from config import ScenarioParams, N_YEARS, YEARS, COLORS, RD_SCHEDULE, build_params
-from engine import run_scenario, run_montecarlo, npv_stats, run_sensitivity
-from ui import kpi_card
+from engine import run_scenario, run_montecarlo, npv_stats, run_sensitivity, ROYALTY_TIERS_DEFAULT
 from styles import CARD
+
+
+def compute_tiered_royalty_callback(rev, tier1_thresh, tier2_thresh, tier1_rate, tier2_rate, tier3_rate):
+    """Compute tiered royalty from a single revenue value."""
+    tier1 = tier1_thresh
+    tier2 = tier2_thresh
+    r1 = tier1_rate / 100
+    r2 = tier2_rate / 100
+    r3 = tier3_rate / 100
+
+    roy = 0.0
+    remaining = rev
+    if remaining > 0:
+        roy += min(remaining, tier1) * r1
+        remaining = max(remaining - tier1, 0)
+    if remaining > 0:
+        roy += min(remaining, tier2 - tier1) * r2
+        remaining = max(remaining - (tier2 - tier1), 0)
+    if remaining > 0:
+        roy += remaining * r3
+    return roy
+
+
+def build_licensor_data(params, base_arrays, ptr, df_lr):
+    """
+    Build licensor economics from engine output and license term inputs.
+    Returns dict with licensor arrays for bridge and annual charts.
+    """
+    n = N_YEARS
+    price = params.get("price", 15000)
+    lsw = params.get("lsw", 0.10)
+    lrw = params.get("lrw", 0.14)
+
+    # License term inputs
+    upfront = float(params.get("upfront", 2.0))
+    dev_milestone = float(params.get("dev_mil", 1.0))
+    reg_milestone = float(params.get("reg_mil", 2.0))
+    comm_milestone = float(params.get("comm_mil", 0.0))
+    tier1_thresh = float(params.get("tier1_thresh", 100.0))
+    tier2_thresh = float(params.get("tier2_thresh", 200.0))
+    tier1_rate = float(params.get("roy_tier1", 5.0))
+    tier2_rate = float(params.get("roy_tier2", 7.0))
+    tier3_rate = float(params.get("roy_tier3", 9.0))
+    royalty_start = int(params.get("royalty_start", 2033))
+    start_year = 2026
+
+    # PTRS probabilities for risk adjustment
+    p1, p2, p3, p4 = 0.63, 0.30, 0.58, 0.90
+    p2_to_approval = p3 * p4
+    full_prob = p1 * p2 * p3 * p4
+
+    # Licensor income components
+    upfront_income = [upfront] + [0.0] * (n - 1)
+    dev_milestone_income = [0.0] * n
+    if 2 < n:
+        dev_milestone_income[2] = dev_milestone
+
+    reg_milestone_income = [0.0] * n
+    comm_milestone_income = [0.0] * n
+    royalty_income = [0.0] * n
+
+    launch_idx = royalty_start - start_year  # year index for launch
+    if launch_idx < n:
+        reg_milestone_income[launch_idx] = reg_milestone
+        if launch_idx + 1 < n:
+            comm_milestone_income[launch_idx + 1] = comm_milestone
+
+    # Compute royalties for royalty period
+    rev = base_arrays.get("base_rev", [0.0] * n)
+    for i in range(n):
+        year = start_year + i
+        if royalty_start <= year <= 2042:
+            royalty_income[i] = compute_tiered_royalty_callback(
+                rev[i], tier1_thresh, tier2_thresh, tier1_rate, tier2_rate, tier3_rate
+            )
+
+    # Raw licensor cash flow
+    licensor_cf_raw = [
+        upfront_income[i] + dev_milestone_income[i] + reg_milestone_income[i] +
+        comm_milestone_income[i] + royalty_income[i]
+        for i in range(n)
+    ]
+
+    # Risk-adjusted licensor cash flow
+    risk_adj = [0.0] * n
+    for i in range(n):
+        if i == 0:
+            risk_adj[i] = upfront_income[0]
+        elif i == 2:
+            risk_adj[i] = dev_milestone_income[2] * p2_to_approval
+        elif i == launch_idx:
+            risk_adj[i] = reg_milestone_income[launch_idx] * full_prob
+        elif i == launch_idx + 1 and launch_idx + 1 < n:
+            risk_adj[i] = comm_milestone_income[launch_idx + 1] * full_prob
+        else:
+            risk_adj[i] = (royalty_income[i] + dev_milestone_income[i] +
+                          reg_milestone_income[i] + comm_milestone_income[i]) * ptr[i]
+
+    # Discounted licensor cash flow
+    disc_licensor = [risk_adj[i] * df_lr[i] for i in range(n)]
+    licensor_npv = sum(disc_licensor)
+
+    # Bridge components (discounted values)
+    upfront_pv = disc_licensor[0]
+    dev_pv = disc_licensor[2] if 2 < n else 0.0
+    reg_pv = disc_licensor[launch_idx] if launch_idx < n else 0.0
+    comm_pv = disc_licensor[launch_idx + 1] if launch_idx + 1 < n else 0.0
+    royalty_pv = sum(disc_licensor[launch_idx:])
+
+    total_milestones_pv = upfront_pv + dev_pv + reg_pv + comm_pv
+
+    return {
+        "licensor_npv": licensor_npv,
+        "risk_adj_licensor_cf": risk_adj,
+        "raw_licensor_cf": licensor_cf_raw,
+        "upfront_income": upfront_income,
+        "dev_milestone_income": dev_milestone_income,
+        "reg_milestone_income": reg_milestone_income,
+        "comm_milestone_income": comm_milestone_income,
+        "royalty_income": royalty_income,
+        "disc_licensor": disc_licensor,
+        "df_lr": df_lr.tolist(),
+        "bridge": {
+            "upfront_pv": upfront_pv,
+            "dev_pv": dev_pv,
+            "reg_pv": reg_pv,
+            "comm_pv": comm_pv,
+            "royalty_pv": royalty_pv,
+            "total_milestones_pv": total_milestones_pv,
+            "total_deal_value": licensor_npv,
+        },
+        "totals": {
+            "upfront": upfront,
+            "dev_milestone": dev_milestone,
+            "reg_milestone": reg_milestone,
+            "comm_milestone": comm_milestone,
+            "total_royalties": sum(royalty_income),
+            "total_milestones": sum(upfront_income) + sum(dev_milestone_income) +
+                                 sum(reg_milestone_income) + sum(comm_milestone_income),
+        }
+    }
 
 
 def register_callbacks(app):
@@ -407,42 +547,99 @@ def register_callbacks(app):
         return fig
 
     @app.callback(
+        Output("licensor-npv", "children"),
+        Output("licensor-total-milestones", "children"),
+        Output("licensor-total-royalties", "children"),
+        Output("licensor-total-deal-value", "children"),
         Output("bridge-chart", "figure"),
         Output("bridge-annual-chart", "figure"),
         Input("store-results", "data"),
+        State("in-asset-dr", "value"), State("in-lrw", "value"),
+        State("in-upfront", "value"),
+        State("in-dev-mil", "value"), State("in-reg-mil", "value"),
+        State("in-comm-mil", "value"),
+        State("in-roy-tier1", "value"), State("in-roy-tier2", "value"),
+        State("in-roy-tier3", "value"),
+        State("in-tier1-thresh", "value"), State("in-tier2-thresh", "value"),
     )
-    def update_bridge(data):
+    def update_licensor(data, asset_dr, lrw, upfront,
+                        dev_mil, reg_mil, comm_mil,
+                        roy_t1, roy_t2, roy_t3, t1_thresh, t2_thresh):
         if not data:
-            return go.Figure(), go.Figure()
-        lf_cf = np.array(data["base_lf_cf"])
-        df_lr = np.array([(1 / (1 + 0.14)) ** i for i in range(N_YEARS)])
-        disc = lf_cf * df_lr
-        up = disc[0]
-        ms = sum(disc[i] for i in [2, 4, 6] if i < N_YEARS)
-        roy = sum(disc[i] for i in range(N_YEARS) if i not in [0, 2, 4, 6] and disc[i] > 0)
+            empty = "—"
+            return empty, empty, empty, empty, go.Figure(), go.Figure()
 
+        base_arrays = data
+
+        # Build licensor data from engine output
+        params = {
+            "price": base_arrays.get("price"),
+            "lsw": float(asset_dr or 12) / 100,
+            "lrw": float(lrw or 14) / 100,
+            "upfront": float(upfront or 2.0),
+            "dev_mil": float(dev_mil or 1.0),
+            "reg_mil": float(reg_mil or 2.0),
+            "comm_mil": float(comm_mil or 0.0),
+            "roy_tier1": float(roy_t1 or 5.0),
+            "roy_tier2": float(roy_t2 or 7.0),
+            "roy_tier3": float(roy_t3 or 9.0),
+            "tier1_thresh": float(t1_thresh or 100.0),
+            "tier2_thresh": float(t2_thresh or 200.0),
+            "royalty_start": 2033,
+        }
+        lrw_rate = float(lrw or 14) / 100
+        df_lr = np.array([(1 / (1 + lrw_rate)) ** i for i in range(N_YEARS)])
+        ptr = np.array(base_arrays.get("base_ptr", [1.0] * N_YEARS))
+
+        lic = build_licensor_data(params, base_arrays, ptr, df_lr)
+        b = lic["bridge"]
+        t = lic["totals"]
+
+        # Summary cards
+        npv_str = f"${lic['licensor_npv']:.1f}M"
+        mil_str = f"${t['total_milestones']:.1f}M"
+        roy_str = f"${t['total_royalties']:.1f}M"
+        deal_str = f"${lic['licensor_npv']:.1f}M"
+
+        # Bridge waterfall chart
         fig1 = go.Figure(go.Waterfall(
-            x=["Upfront", "Milestones", "Royalty", "Total"],
-            measure=["relative", "relative", "relative", "total"],
-            y=[up, ms, roy, 0],
-            text=[f"${up:.1f}M", f"${ms:.1f}M", f"${roy:.1f}M", f"${data['base_lr_npv']:.1f}M"],
+            x=["Upfront", "Dev Milestone", "Reg Milestone", "Comm Milestone", "Royalties", "Total"],
+            measure=["relative", "relative", "relative", "relative", "relative", "total"],
+            y=[b["upfront_pv"], b["dev_pv"], b["reg_pv"], b["comm_pv"], b["royalty_pv"], 0],
+            text=[f"${b['upfront_pv']:.1f}M", f"${b['dev_pv']:.1f}M",
+                  f"${b['reg_pv']:.1f}M", f"${b['comm_pv']:.1f}M",
+                  f"${b['royalty_pv']:.1f}M", f"${lic['licensor_npv']:.1f}M"],
             textposition="inside",
             connector={"line": {"color": "#ccc"}},
             increasing={"marker": {"color": COLORS["blue"]}},
             totals={"marker": {"color": COLORS["teal"]}},
         ))
-        fig1.update_layout(template="plotly_white", height=340,
-                           title=f"Licensor NPV Bridge — ${data['base_lr_npv']:.1f}M",
-                           margin=dict(t=40, b=20))
+        fig1.update_layout(
+            template="plotly_white", height=340,
+            title=f"Licensor Deal NPV Bridge — ${lic['licensor_npv']:.1f}M",
+            margin=dict(t=40, b=20)
+        )
 
-        colors_lc = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lf_cf]
+        # Annual cash flow chart
+        colors_lc = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lic["risk_adj_licensor_cf"]]
         fig2 = go.Figure()
-        fig2.add_trace(go.Bar(x=list(YEARS), y=list(lf_cf), name="Cash Flow", marker_color=colors_lc))
-        fig2.add_trace(go.Scatter(x=list(YEARS), y=list(np.cumsum(disc)), name="Cum. PV",
-                                  line=dict(color=COLORS["amber"], width=2)))
-        fig2.update_layout(template="plotly_white", height=280,
-                           title="Annual Licensor CF", margin=dict(t=30, b=20))
-        return fig1, fig2
+        fig2.add_trace(go.Bar(
+            x=list(YEARS), y=lic["risk_adj_licensor_cf"],
+            name="Risk-Adj CF", marker_color=colors_lc
+        ))
+        disc_cum = np.cumsum(lic["disc_licensor"])
+        fig2.add_trace(go.Scatter(
+            x=list(YEARS), y=list(disc_cum), name="Cum. PV",
+            line=dict(color=COLORS["amber"], width=2)
+        ))
+        fig2.update_layout(
+            template="plotly_white", height=280,
+            title="Annual Risk-Adjusted Licensor CF",
+            margin=dict(t=30, b=20),
+            legend=dict(orientation="h", y=1.06)
+        )
+
+        return npv_str, mil_str, roy_str, deal_str, fig1, fig2
 
     @app.callback(
         Output("tornado-chart", "figure"),
