@@ -50,3 +50,25 @@ SMALL_LABEL = {
     "color": COLORS["muted"],
     "marginBottom": "4px",
 }
+
+TABLE_CELL = {
+    "fontFamily": "monospace",
+    "fontSize": "0.8rem",
+    "padding": "3px 6px",
+    "textAlign": "right",
+    "border": "1px solid #e9ecef",
+}
+
+TABLE_HEADER = {
+    "backgroundColor": "#1f6feb",
+    "color": "white",
+    "fontWeight": "700",
+    "fontSize": "0.78rem",
+    "padding": "4px 6px",
+    "textAlign": "right",
+}
+
+TABLE_STYLE = {
+    "overflowX": "auto",
+    "border": f"1px solid {COLORS['border']}",
+}

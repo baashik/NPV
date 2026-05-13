@@ -1,25 +1,20 @@
-"""
-NPV Model — Entry point.
-"""
-
 import os
 from dash import Dash
 import dash_bootstrap_components as dbc
 
-from config import COLORS
-from ui import build_app_layout
 from callbacks import register_callbacks
+from layout import build_layout
 
 app = Dash(
     __name__,
-    external_stylesheets=[dbc.themes.FLATLY, dbc.icons.BOOTSTRAP],
-    title="NPV Model",
+    external_stylesheets=[dbc.themes.BOOTSTRAP],
+    suppress_callback_exceptions=True,
+    title="Biopharma Licensing Monte Carlo NPV Dashboard",
     meta_tags=[{"name": "viewport", "content": "width=device-width, initial-scale=1"}],
 )
 server = app.server
 
-app.layout = build_app_layout()
-
+app.layout = build_layout()
 register_callbacks(app)
 
 if __name__ == "__main__":
