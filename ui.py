@@ -44,8 +44,9 @@ def sidebar():
         html.Hr(style={"margin": "0 0 12px"}),
         dbc.Nav([
             dbc.NavLink("Assumptions + DCF", id="nav-dcf", active=True, n_clicks=0),
-            dbc.NavLink("Monte Carlo", id="nav-mc", active=False, n_clicks=0),
+            dbc.NavLink("Licensee Model", id="nav-licensee", active=False, n_clicks=0),
             dbc.NavLink("Licensor Bridge", id="nav-bridge", active=False, n_clicks=0),
+            dbc.NavLink("Monte Carlo", id="nav-mc", active=False, n_clicks=0),
             dbc.NavLink("Tornado", id="nav-sens", active=False, n_clicks=0),
         ], vertical=True, pills=True, className="mb-3"),
         html.Hr(),
@@ -60,10 +61,11 @@ def sidebar():
 # ============================================================================
 def summary_cards(page):
     prefix_map = {
-        "dcf":    ("summary-dcf-lic-mean", "summary-dcf-lic-prob", "summary-dcf-lr-mean", "summary-dcf-lr-prob"),
-        "mc":     ("summary-mc-lic-mean",  "summary-mc-lic-prob",  "summary-mc-lr-mean",  "summary-mc-lr-prob"),
-        "bridge": ("summary-br-lic-mean",  "summary-br-lic-prob",  "summary-br-lr-mean",  "summary-br-lr-prob"),
-        "sens":   ("summary-se-lic-mean",  "summary-se-lic-prob",  "summary-se-lr-mean",  "summary-se-lr-prob"),
+        "dcf":     ("summary-dcf-lic-mean",  "summary-dcf-lic-prob",  "summary-dcf-lr-mean",  "summary-dcf-lr-prob"),
+        "mc":      ("summary-mc-lic-mean",   "summary-mc-lic-prob",   "summary-mc-lr-mean",   "summary-mc-lr-prob"),
+        "bridge":  ("summary-br-lic-mean",   "summary-br-lic-prob",   "summary-br-lr-mean",   "summary-br-lr-prob"),
+        "sens":    ("summary-se-lic-mean",   "summary-se-lic-prob",   "summary-se-lr-mean",   "summary-se-lr-prob"),
+        "licensee":("summary-le-lic-mean",   "summary-le-lic-prob",   "summary-le-lr-mean",   "summary-le-lr-prob"),
     }
     ids = prefix_map.get(page, prefix_map["dcf"])
     return dbc.Row([
@@ -176,6 +178,32 @@ def mc_page():
         summary_cards("mc"),
         html.Div(dbc.Card(dbc.CardBody(dcc.Graph(id="mc-chart", config={"displayModeBar": False})),
                           style={**CARD, "padding": "8px"})),
+    ])
+
+
+def licensee_page():
+    return html.Div([
+        summary_cards("licensee"),
+        dbc.Row([
+            dbc.Col(html.Div([html.Div("Licensee NPV", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensee-npv", style={"fontWeight": "800", "color": COLORS["blue"]})],
+                      style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Total Payments to Licensor", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensee-total-payments")],
+                      style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Peak Revenue", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensee-peak-revenue")],
+                      style={**CARD, "padding": "14px"}), md=3),
+            dbc.Col(html.Div([html.Div("Licensee WACC", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
+                             html.H4(id="licensee-wacc-output")],
+                      style={**CARD, "padding": "14px"}), md=3),
+        ], className="g-2 mb-3"),
+        html.Div([
+            dbc.Card(dbc.CardBody(dcc.Graph(id="licensee-annual-cf-chart", config={"displayModeBar": False})),
+                     style={**CARD, "padding": "8px", "marginBottom": "14px"}),
+            dbc.Card(dbc.CardBody(dcc.Graph(id="licensee-cumulative-pv-chart", config={"displayModeBar": False})),
+                     style={**CARD, "padding": "8px"}),
+        ]),
     ])
 
 
@@ -294,8 +322,9 @@ def build_app_layout():
             html.Main([
                 action_bar(),
                 html.Div(id="page-dcf", children=dcf_page()),
-                html.Div(id="page-mc", children=mc_page(), style={"display": "none"}),
+                html.Div(id="page-licensee", children=licensee_page(), style={"display": "none"}),
                 html.Div(id="page-bridge", children=bridge_page(), style={"display": "none"}),
+                html.Div(id="page-mc", children=mc_page(), style={"display": "none"}),
                 html.Div(id="page-sens", children=sens_page(), style={"display": "none"}),
             ], style=CONTENT),
         ], style={"display": "flex", "alignItems": "stretch"}),

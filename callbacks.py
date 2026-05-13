@@ -160,8 +160,8 @@ def register_callbacks(app):
     # ==========================================================================
     # Sidebar navigation
     # ==========================================================================
-    pages = ["dcf", "mc", "bridge", "sens"]
-    nav_ids = ["nav-dcf", "nav-mc", "nav-bridge", "nav-sens"]
+    pages = ["dcf", "licensee", "mc", "bridge", "sens"]
+    nav_ids = ["nav-dcf", "nav-licensee", "nav-mc", "nav-bridge", "nav-sens"]
 
     @app.callback(
         [Output(f"page-{p}", "style") for p in pages]
@@ -698,3 +698,70 @@ def register_callbacks(app):
                            xaxis_title="Price ($K/patient/yr)",
                            yaxis_title="eNPV ($M)", margin=dict(t=30, b=20))
         return fig1, fig2
+
+    # ==========================================================================
+    # Licensee Model page
+    # ==========================================================================
+    @app.callback(
+        Output("licensee-npv", "children"),
+        Output("licensee-total-payments", "children"),
+        Output("licensee-peak-revenue", "children"),
+        Output("licensee-wacc-output", "children"),
+        Output("licensee-annual-cf-chart", "figure"),
+        Output("licensee-cumulative-pv-chart", "figure"),
+        Input("store-results", "data"),
+        State("in-lsw", "value"),
+    )
+    def update_licensee(data, lsw):
+        if not data:
+            empty = "—"
+            return empty, empty, empty, empty, go.Figure(), go.Figure()
+
+        fcf = np.array(data.get("base_fcf", [0.0] * N_YEARS))
+        royalty = np.array(data.get("base_royalty", [0.0] * N_YEARS))
+        ptr = np.array(data.get("base_ptr", [1.0] * N_YEARS))
+        rev = np.array(data.get("base_rev", [0.0] * N_YEARS))
+        disc_factor_ls = np.array(data.get("base_df_ls", [1.0] * N_YEARS))
+        licensor_cf = np.array(data.get("base_lf_cf", [0.0] * N_YEARS))
+
+        licensee_npv = data.get("base_enpv", 0.0)
+        total_payments = float(np.sum(licensor_cf))
+        peak_rev = float(np.max(rev))
+        wacc_val = float(lsw or 10.0)
+
+        licensee_cf = fcf - royalty
+        risk_adj_cf = licensee_cf * ptr
+        disc_cum = np.cumsum(risk_adj_cf * disc_factor_ls)
+
+        npv_str = f"${licensee_npv:.1f}M"
+        payments_str = f"${total_payments:.1f}M"
+        peak_str = f"${peak_rev:.1f}M"
+        wacc_str = f"{wacc_val:.1f}%"
+
+        colors = [COLORS["blue"] if v >= 0 else COLORS["red"] for v in risk_adj_cf]
+
+        fig1 = go.Figure()
+        fig1.add_trace(go.Bar(x=list(YEARS), y=risk_adj_cf.tolist(),
+                              name="Risk-Adj CF", marker_color=colors, opacity=0.85))
+        fig1.update_layout(
+            template="plotly_white", height=300,
+            title="Annual Risk-Adjusted Licensee CF",
+            xaxis_title="Year", yaxis_title="$M",
+            margin=dict(t=30, b=20),
+            legend=dict(orientation="h", y=1.06)
+        )
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=list(YEARS), y=disc_cum.tolist(),
+                                  name="Cum. PV (Lic. WACC)",
+                                  line=dict(color=COLORS["blue"], width=2.5),
+                                  fill="tozeroy", fillcolor="rgba(31,111,235,0.1)"))
+        fig2.update_layout(
+            template="plotly_white", height=280,
+            title="Cumulative Discounted Licensee CF",
+            xaxis_title="Year", yaxis_title="$M (PV)",
+            margin=dict(t=30, b=20),
+            legend=dict(orientation="h", y=1.06)
+        )
+
+        return npv_str, payments_str, peak_str, wacc_str, fig1, fig2
