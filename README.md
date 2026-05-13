@@ -1,6 +1,6 @@
 ---
-title: Biopharma Licensing Monte Carlo NPV
-emoji: 📈
+title: Biopharma Licensing Valuation Platform
+emoji: 📊
 colorFrom: blue
 colorTo: indigo
 sdk: docker
@@ -8,7 +8,7 @@ app_file: app.py
 pinned: false
 ---
 
-# Biopharma Licensing Monte Carlo NPV
+# Biopharma Licensing Valuation Platform
 
 A Dash web app for modeling a **biopharma licensing deal** using Monte Carlo simulation and discounted cash flow analysis.
 
