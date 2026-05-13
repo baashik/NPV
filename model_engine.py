@@ -62,7 +62,7 @@ ROW_DEFS = [
     ("rnpv", "rNPV (risk-adjusted, M)", "currency", False),
     ("licensee_enpv", "Licensee eNPV (M)", "currency", False),
     ("licensor_npv", "Licensor NPV (M)", "currency", False),
-    ("discount_rate", "Discount Rate (WACC)", "pct", True),
+    ("discount_rate", "Asset Discount Rate (%)", "pct", True),
 ]
 
 EDITABLE_ROWS = {row_key for row_key, _, _, editable in ROW_DEFS if editable}
@@ -355,6 +355,10 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
     p3 = _pct(a["phase_iii_success"])
     p4 = _pct(a["approval_success"])
 
+    # Because this is a Phase I asset, post-launch cash flows remain
+    # probability-adjusted by cumulative probability of approval.
+    cumulative_prob_approval = p1 * p2 * p3 * p4
+
     for i, year in enumerate(years):
         phase = _phase_for_index(i, year, a["launch_year"])
         if phase == "phase_i":
@@ -370,12 +374,14 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
             sr = _override(overrides, "success_rate", i, p4)
             cpos = sr
         else:
-            sr = _override(overrides, "success_rate", i, 1.0)
-            cpos = sr
+            # Commercial / post-launch years: still probability-adjusted
+            # because this is a Phase I asset that hasn't been approved yet
+            sr = _override(overrides, "success_rate", i, cumulative_prob_approval)
+            cpos = cumulative_prob_approval
         success_rate.append(sr)
         cumulative_pos.append(cpos)
 
-    discount_rate = [_override(overrides, "discount_rate", i, _pct(a["wacc"])) for i in range(n)]
+    discount_rate = [_override(overrides, "discount_rate", i, _pct(a["asset_discount_rate"])) for i in range(n)]
     discount_factor = [
         _override(overrides, "discount_factor", i, 1 / ((1 + discount_rate[i]) ** (i + 1)))
         for i in range(n)
@@ -397,16 +403,19 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
         free_cash_flow[i] - royalty_paid[i] - milestone_payments[i]
         for i in range(n)
     ]
+    # Risk-adjust all years consistently for Phase I asset
     licensee_risk_adjusted_cf = [
-        licensee_cash_flow[i] if i == 0 else licensee_cash_flow[i] * cumulative_pos[i]
+        licensee_cash_flow[i] * cumulative_pos[i]
         for i in range(n)
     ]
+    # Licensor gets guaranteed deal payments (upfront) risk-adjusted only by cumulative POS,
+    # but royalty income also uses cumulative POS for Phase I
     licensor_cash_flow = [
-        milestone_payments[i] if i == 0 else (royalty_paid[i] + milestone_payments[i]) * cumulative_pos[i]
+        (royalty_paid[i] + milestone_payments[i]) * cumulative_pos[i]
         for i in range(n)
     ]
 
-    licensee_discount_factor = _discount_factors(_pct(a["licensee_discount_rate"]), n)
+    licensee_discount_factor = _discount_factors(_pct(a["licensee_wacc"]), n)
     licensor_discount_factor = _discount_factors(_pct(a["licensor_discount_rate"]), n)
     licensee_discounted_cf = [
         licensee_risk_adjusted_cf[i] * licensee_discount_factor[i]
@@ -461,8 +470,8 @@ def build_dcf_model(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
         "total_deal_value": float(np.sum(royalty_paid) + np.sum(milestone_payments)),
         "peak_revenue": float(np.max(revenue)) if revenue else 0.0,
         "peak_patients": float(np.max(patients_treated)) if patients_treated else 0.0,
-        "wacc": _pct(a["wacc"]),
-        "licensee_discount_rate": _pct(a["licensee_discount_rate"]),
+        "asset_discount_rate": _pct(a["asset_discount_rate"]),
+        "licensee_wacc": _pct(a["licensee_wacc"]),
         "licensor_discount_rate": _pct(a["licensor_discount_rate"]),
         "approval_probability": p1 * p2 * p3 * p4,
         "launch_year": a["launch_year"],
