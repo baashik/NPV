@@ -179,7 +179,6 @@ def dcf_table():
                 columns=[],
                 editable=True,
                 merge_duplicate_headers=True,
-                fixed_columns=None,
                 page_action="none",
                 style_table={
                     "overflowX": "auto",
