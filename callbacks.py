@@ -1,6 +1,6 @@
 """NPV Model — Dash callbacks for modular layout."""
 
-from dash import Input, Output, State, ctx, no_update, dcc
+from dash import Input, Output, State, ctx, no_update, dcc, html
 import plotly.graph_objs as go
 import numpy as np
 import pandas as pd
@@ -189,29 +189,30 @@ def register_callbacks(app):
     def update_dcf(
         *vals_and_states
     ):
-        # Unpack
-        input_values = vals_and_states[:-5]  # all assumption inputs
-        overrides = vals_and_states[-5]
-        sens_metric = vals_and_states[-4]
-        licensor_dr = vals_and_states[-3]
-        licensee_wacc = vals_and_states[-2]
-        _unused = vals_and_states[-1]  # extra
+        state_count = 4
+        input_values = vals_and_states[:-state_count]
+        overrides = vals_and_states[-state_count]
+        sens_metric = vals_and_states[-state_count + 1]
+        licensor_dr = vals_and_states[-state_count + 2]
+        licensee_wacc = vals_and_states[-state_count + 3]
 
         # Build assumptions dict from inputs
         a = dict(DEFAULT_ASSUMPTIONS)
-        for i, comp_id in enumerate(assumption_input_ids):
-            if comp_id in ASSUMPTION_INPUTS:
-                key = [k for k, v in ASSUMPTION_INPUTS.items() if v == comp_id][0]
-                val = input_values[i]
-                if isinstance(val, str) and val == "":
-                    val = None
-                if val is not None:
-                    if key in ("forecast_years", "start_year", "launch_year",
-                               "royalty_start_year", "royalty_end_year"):
-                        try:
-                            val = int(float(val))
-                        except (TypeError, ValueError):
-                            pass
+        for (key, comp_id), val in zip(ASSUMPTION_INPUTS.items(), input_values):
+            if isinstance(val, str) and val == "":
+                val = None
+            if val is not None:
+                if key in (
+                    "forecast_years",
+                    "start_year",
+                    "launch_year",
+                    "royalty_start_year",
+                    "royalty_end_year",
+                ):
+                    try:
+                        val = int(float(val))
+                    except (TypeError, ValueError):
+                        pass
                 a[key] = val
 
         a = clean_assumptions(a)
