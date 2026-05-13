@@ -1,559 +1,438 @@
-"""Dash callbacks for the modular valuation dashboard."""
-
-from __future__ import annotations
+"""NPV Model — Dash callbacks."""
 
 import json
-
-from dash import Input, Output, State, ctx, dcc, no_update
+from datetime import datetime
+import numpy as np
+from dash import html, no_update, dcc, dash_table, Input, Output, State
+import dash_bootstrap_components as dbc
 import plotly.graph_objs as go
+from plotly.subplots import make_subplots
 
-from model_engine import (
-    DEFAULT_ASSUMPTIONS,
-    EDITABLE_ROWS,
-    ROW_DEFS,
-    SECTION_KEYS,
-    SUBTOTAL_ROWS,
-    build_dcf_model,
-    parse_user_value,
-    row_format_map,
-    table_columns,
-    table_data,
-)
-from scenario_io import export_payload, make_scenario, scenario_options
-from simulation import parse_low_base_high, run_monte_carlo, run_sensitivity
-from styles import COLORS
-
-
-ASSUMPTION_INPUTS = [
-    ("start_year", "start-year"),
-    ("forecast_years", "forecast-years"),
-    ("currency", "currency"),
-    ("units", "units"),
-    ("initial_population", "initial-population"),
-    ("population_growth", "population-growth"),
-    ("target_patient_pct", "target-patient-pct"),
-    ("diagnosis_rate", "diagnosis-rate"),
-    ("treatment_rate", "treatment-rate"),
-    ("peak_penetration", "peak-penetration"),
-    ("price_per_unit", "price-per-unit"),
-    ("launch_year", "launch-year"),
-    ("cogs_pct", "cogs-pct"),
-    ("ga_opex_pct", "ga-opex-pct"),
-    ("phase_i_rd", "phase-i-rd"),
-    ("phase_ii_rd", "phase-ii-rd"),
-    ("phase_iii_rd", "phase-iii-rd"),
-    ("approval_expense", "approval-expense"),
-    ("pre_marketing", "pre-marketing"),
-    ("tax_rate", "tax-rate"),
-    ("wacc", "wacc"),
-    ("licensee_discount_rate", "licensee-discount-rate"),
-    ("phase_i_success", "phase-i-success"),
-    ("phase_ii_success", "phase-ii-success"),
-    ("phase_iii_success", "phase-iii-success"),
-    ("approval_success", "approval-success"),
-    ("upfront_payment", "upfront-payment"),
-    ("development_milestones", "development-milestones"),
-    ("regulatory_milestones", "regulatory-milestones"),
-    ("commercial_milestones", "commercial-milestones"),
-    ("royalty_rate", "royalty-rate"),
-    ("royalty_tier_1_rate", "royalty-tier-1-rate"),
-    ("royalty_tier_2_rate", "royalty-tier-2-rate"),
-    ("royalty_tier_3_rate", "royalty-tier-3-rate"),
-    ("royalty_start_year", "royalty-start-year"),
-    ("royalty_end_year", "royalty-end-year"),
-    ("licensor_discount_rate", "licensor-discount-rate"),
-]
-
-
-def _assumption_states():
-    return [Input(component_id, "value") for _, component_id in ASSUMPTION_INPUTS]
-
-
-def _assumption_state_objects():
-    return [State(component_id, "value") for _, component_id in ASSUMPTION_INPUTS]
-
-
-def _assumptions_from_values(values):
-    return {name: value for (name, _), value in zip(ASSUMPTION_INPUTS, values)}
-
-
-def _money(value, currency="USD"):
-    symbol = {"USD": "$", "EUR": "€", "GBP": "£"}.get(currency, "")
-    if value is None:
-        return "—"
-    value = float(value)
-    if value < 0:
-        return f"({symbol}{abs(value):,.1f}M)"
-    return f"{symbol}{value:,.1f}M"
-
-
-def _pct(value):
-    if value is None:
-        return "—"
-    return f"{float(value) * 100:.1f}%"
-
-
-def _table_styles():
-    styles = [
-        {
-            "if": {"column_id": "label"},
-            "textAlign": "left",
-            "fontWeight": "700",
-            "backgroundColor": "#fbfcfd",
-            "minWidth": "260px",
-            "width": "260px",
-            "maxWidth": "320px",
-        },
-        {
-            "if": {"column_id": "edit"},
-            "textAlign": "center",
-            "color": COLORS["accent"],
-            "fontWeight": "800",
-            "minWidth": "42px",
-            "width": "42px",
-            "maxWidth": "42px",
-        },
-    ]
-
-    for idx, (row_key, _label, fmt, _editable) in enumerate(ROW_DEFS):
-        if row_key in SECTION_KEYS or fmt == "section":
-            styles.append(
-                {
-                    "if": {"row_index": idx},
-                    "backgroundColor": COLORS["section"],
-                    "fontWeight": "900",
-                    "textAlign": "left",
-                    "color": COLORS["text"],
-                }
-            )
-        elif row_key in SUBTOTAL_ROWS or row_key in {"licensee_enpv", "licensor_npv"}:
-            styles.append({"if": {"row_index": idx}, "fontWeight": "900", "backgroundColor": "#f8fafc"})
-    return styles
-
-
-def _revenue_fig(frame, currency):
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=frame["year"], y=frame["revenue"], name="Revenue", marker_color=COLORS["accent"]))
-    fig.add_trace(
-        go.Scatter(
-            x=frame["year"],
-            y=frame["free_cash_flow"],
-            name="Project FCF",
-            mode="lines+markers",
-            line={"color": COLORS["green"], "width": 2.5},
-        )
-    )
-    fig.add_trace(
-        go.Scatter(
-            x=frame["year"],
-            y=frame["licensee_risk_adjusted_cf"],
-            name="Licensee Risk-Adjusted CF",
-            mode="lines",
-            line={"color": COLORS["amber"], "width": 2, "dash": "dot"},
-        )
-    )
-    fig.add_hline(y=0, line_color="#111827", line_width=1)
-    fig.update_layout(
-        template="plotly_white",
-        title="Revenue and Free Cash Flow Over Time",
-        height=350,
-        margin={"l": 46, "r": 18, "t": 52, "b": 36},
-        legend={"orientation": "h", "y": 1.08},
-        yaxis_title=f"{currency} M",
-    )
-    return fig
-
-
-def _discounted_fig(frame, currency):
-    fig = go.Figure()
-    colors = [COLORS["green"] if v >= 0 else COLORS["red"] for v in frame["discounted_fcf"]]
-    fig.add_trace(go.Bar(x=frame["year"], y=frame["discounted_fcf"], name="Project eNPV", marker_color=colors))
-    fig.add_trace(
-        go.Scatter(
-            x=frame["year"],
-            y=frame["licensee_discounted_cf"].cumsum(),
-            name="Cumulative Licensee eNPV",
-            mode="lines+markers",
-            line={"color": COLORS["amber"], "width": 2.5},
-        )
-    )
-    fig.add_hline(y=0, line_color="#111827", line_width=1)
-    fig.update_layout(
-        template="plotly_white",
-        title="Risk-Adjusted Discounted Cash Flow",
-        height=350,
-        margin={"l": 46, "r": 18, "t": 52, "b": 36},
-        legend={"orientation": "h", "y": 1.08},
-        yaxis_title=f"{currency} M",
-    )
-    return fig
-
-
-def _tornado_fig(rows, currency):
-    fig = go.Figure()
-    if not rows:
-        return fig
-    rows = list(reversed(rows[:10]))
-    labels = [row["label"] for row in rows]
-    base = [row["base"] for row in rows]
-    lows = [row["low"] - row["base"] for row in rows]
-    highs = [row["high"] - row["base"] for row in rows]
-    fig.add_trace(go.Bar(y=labels, x=lows, orientation="h", name="Low case", marker_color=COLORS["red"]))
-    fig.add_trace(go.Bar(y=labels, x=highs, orientation="h", name="High case", marker_color=COLORS["accent"]))
-    fig.add_vline(x=0, line_color="#111827", line_width=1)
-    fig.update_layout(
-        template="plotly_white",
-        title=f"Tornado Sensitivity vs Base Licensee eNPV ({_money(base[-1], currency)})",
-        height=380,
-        barmode="overlay",
-        margin={"l": 160, "r": 18, "t": 56, "b": 36},
-        xaxis_title=f"Change in eNPV ({currency} M)",
-        legend={"orientation": "h", "y": 1.08},
-    )
-    return fig
-
-
-def _licensor_figs(frame, summary, currency):
-    milestone_pv = []
-    royalty_pv = []
-    for i, row in frame.iterrows():
-        pos = 1.0 if i == 0 else row["cumulative_pos"]
-        milestone_pv.append(row["milestone_payments"] * pos * row["licensor_discount_factor"])
-        royalty_pv.append(row["royalty_paid"] * row["cumulative_pos"] * row["licensor_discount_factor"])
-
-    upfront = milestone_pv[0] if milestone_pv else 0.0
-    milestones = sum(milestone_pv[1:])
-    royalties = sum(royalty_pv)
-
-    bridge = go.Figure(
-        go.Waterfall(
-            x=["Upfront", "Milestones", "Royalties", "Licensor NPV"],
-            y=[upfront, milestones, royalties, 0],
-            measure=["relative", "relative", "relative", "total"],
-            text=[_money(upfront, currency), _money(milestones, currency), _money(royalties, currency), _money(summary["licensor_npv"], currency)],
-            textposition="inside",
-            connector={"line": {"color": COLORS["border"]}},
-        )
-    )
-    bridge.update_layout(
-        template="plotly_white",
-        title="Licensor NPV Bridge",
-        height=330,
-        margin={"l": 46, "r": 18, "t": 52, "b": 36},
-        yaxis_title=f"{currency} M",
-    )
-
-    annual = go.Figure()
-    annual.add_trace(go.Bar(x=frame["year"], y=frame["licensor_cash_flow"], name="Risk-Adjusted Cash Flow", marker_color=COLORS["accent"]))
-    annual.add_trace(
-        go.Scatter(
-            x=frame["year"],
-            y=frame["licensor_discounted_cf"].cumsum(),
-            name="Cumulative PV",
-            mode="lines+markers",
-            line={"color": COLORS["amber"], "width": 2.5},
-        )
-    )
-    annual.add_hline(y=0, line_color="#111827", line_width=1)
-    annual.update_layout(
-        template="plotly_white",
-        title="Annual Licensor Cash Flow",
-        height=330,
-        margin={"l": 46, "r": 18, "t": 52, "b": 36},
-        legend={"orientation": "h", "y": 1.08},
-        yaxis_title=f"{currency} M",
-    )
-    return bridge, annual
-
-
-def _mc_histogram(results, currency):
-    fig = go.Figure()
-    fig.add_trace(go.Histogram(x=results["rnpv"], name="Asset rNPV", marker_color=COLORS["accent"], opacity=0.65, nbinsx=50))
-    fig.add_trace(go.Histogram(x=results["licensee_enpv"], name="Licensee eNPV", marker_color=COLORS["green"], opacity=0.55, nbinsx=50))
-    fig.add_trace(go.Histogram(x=results["licensor_npv"], name="Licensor NPV", marker_color=COLORS["amber"], opacity=0.50, nbinsx=50))
-    fig.add_vline(x=0, line_color="#111827", line_width=1)
-    fig.update_layout(
-        template="plotly_white",
-        title=f"Monte Carlo NPV Distribution ({currency} M)",
-        height=360,
-        barmode="overlay",
-        margin={"l": 46, "r": 18, "t": 52, "b": 36},
-        legend={"orientation": "h", "y": 1.08},
-    )
-    return fig
+from config import ScenarioParams, N_YEARS, YEARS, COLORS, RD_SCHEDULE, build_params
+from engine import run_scenario, run_montecarlo, npv_stats, run_sensitivity
+from ui import kpi_card
+from styles import CARD
 
 
 def register_callbacks(app):
-    @app.callback(
-        Output("active-page", "data"),
-        Input("nav-dcf", "n_clicks"),
-        Input("nav-licensor", "n_clicks"),
-        Input("nav-monte-carlo", "n_clicks"),
-    )
-    def choose_page(_dcf, _licensor, _monte_carlo):
-        trigger = ctx.triggered_id
-        if trigger == "nav-licensor":
-            return "licensor"
-        if trigger == "nav-monte-carlo":
-            return "monte_carlo"
-        return "dcf"
+    """Attach all callbacks to the Dash app instance."""
+
+    # ==========================================================================
+    # Sidebar navigation
+    # ==========================================================================
+    pages = ["dcf", "mc", "bridge", "sens"]
+    nav_ids = ["nav-dcf", "nav-mc", "nav-bridge", "nav-sens"]
 
     @app.callback(
-        Output("nav-dcf", "active"),
-        Output("nav-licensor", "active"),
-        Output("nav-monte-carlo", "active"),
-        Output("page-dcf", "style"),
-        Output("page-licensor", "style"),
-        Output("page-monte-carlo", "style"),
-        Input("active-page", "data"),
+        [Output(f"page-{p}", "style") for p in pages]
+        + [Output(n, "active") for n in nav_ids],
+        [Input(n, "n_clicks") for n in nav_ids],
     )
-    def render_page(active):
-        show = {}
-        hide = {"display": "none"}
-        return (
-            active == "dcf",
-            active == "licensor",
-            active == "monte_carlo",
-            show if active == "dcf" else hide,
-            show if active == "licensor" else hide,
-            show if active == "monte_carlo" else hide,
-        )
+    def navigate(*_):
+        ctx = dash.triggered
+        if not ctx:
+            active = "dcf"
+        else:
+            triggered_id = ctx[0]["prop_id"].split(".")[0]
+            active = triggered_id.replace("nav-", "")
 
+        styles = []
+        for p in pages:
+            styles.append({"display": "block" if p == active else "none"})
+
+        actives = [p == active for p in pages]
+        return styles + actives
+
+    # ==========================================================================
+    # Scenario dropdown
+    # ==========================================================================
     @app.callback(
-        Output("manual-overrides", "data"),
-        Input("dcf-table", "data_timestamp"),
-        Input("reset-overrides", "n_clicks"),
-        State("dcf-table", "data"),
-        State("last-table-data", "data"),
-        State("manual-overrides", "data"),
+        Output("load-scenario-dropdown", "options"),
+        Input("store-scenarios", "data"),
+    )
+    def update_dropdown(data):
+        if not data:
+            return []
+        return [{"label": n, "value": n} for n in sorted(data.keys())]
+
+    # ==========================================================================
+    # Load scenario — auto-load on dropdown change
+    # ==========================================================================
+    @app.callback(
+        [Output("in-pop", "value"), Output("in-price", "value"),
+         Output("in-pen", "value"), Output("in-cogs", "value"),
+         Output("in-tax", "value"), Output("in-lsw", "value"),
+         Output("in-lrw", "value"), Output("p1", "value"),
+         Output("p2", "value"), Output("p3", "value"),
+         Output("p4", "value"), Output("in-upfront", "value"),
+         Output("in-mil", "value"), Output("scenario-name", "value")],
+        Input("load-scenario-dropdown", "value"),
+        State("store-scenarios", "data"),
+    )
+    def load_scenario(name, data):
+        if not name or not data or name not in data:
+            return (no_update,) * 14
+        s = data[name]
+        return (s["eu_pop"], s["price"], s["pen"], s["cogs"],
+                s["tax"], s["lsw"], s["lrw"], s["p1"], s["p2"],
+                s["p3"], s["p4"], s["upfront"], s["mil"], name)
+
+    # ==========================================================================
+    # Run simulation
+    # ==========================================================================
+    @app.callback(
+        Output("store-results", "data"),
+        Output("run-status", "children"),
+        Input("btn-run", "n_clicks"),
+        State("in-pop", "value"), State("in-price", "value"),
+        State("in-pen", "value"), State("in-cogs", "value"),
+        State("in-tax", "value"), State("in-lsw", "value"),
+        State("in-lrw", "value"), State("p1", "value"),
+        State("p2", "value"), State("p3", "value"),
+        State("p4", "value"), State("in-upfront", "value"),
+        State("in-mil", "value"), State("sl-sims", "value"),
         prevent_initial_call=True,
     )
-    def capture_manual_edits(_timestamp, _reset_clicks, current_data, previous_data, overrides):
-        if ctx.triggered_id == "reset-overrides":
-            return {}
-        if not current_data or not previous_data:
-            return no_update
+    def run_sim(n_clicks, pop, price, pen, cogs, tax, lsw, lrw,
+                p1, p2, p3, p4, upfront, mil, n_sims):
+        params = build_params(pop, price, pen, cogs, tax, lsw, lrw,
+                              p1, p2, p3, p4, upfront, mil)
+        base = run_scenario(0.002, params.peak_pen, float(price or 15000),
+                            float(lsw or 10) / 100, float(lrw or 14) / 100, params)
+        ls, lr = run_montecarlo(int(n_sims or 5000), params, float(price or 15000))
+        ls_s = npv_stats(ls)
+        lr_s = npv_stats(lr)
+        sens = run_sensitivity(params, float(price or 15000), base["licensee_enpv"])
 
-        formats = row_format_map()
-        updated = dict(overrides or {})
-        previous_by_key = {row.get("row_key"): row for row in previous_data}
-
-        for row in current_data:
-            row_key = row.get("row_key")
-            if row_key not in EDITABLE_ROWS:
-                continue
-            previous = previous_by_key.get(row_key, {})
-            fmt = formats.get(row_key, "number")
-            for column_id, value in row.items():
-                if not column_id.startswith("y") or value == previous.get(column_id):
-                    continue
-                try:
-                    year_index = int(column_id[1:])
-                except ValueError:
-                    continue
-                parsed = parse_user_value(value, fmt)
-                if parsed is None:
-                    continue
-                updated[f"{row_key}|{year_index}"] = parsed
-        return updated
-
-    @app.callback(
-        Output("dcf-table", "columns"),
-        Output("dcf-table", "data"),
-        Output("dcf-table", "style_data_conditional"),
-        Output("last-table-data", "data"),
-        Output("model-summary-store", "data"),
-        Output("summary-rnpv", "children"),
-        Output("summary-licensee-enpv", "children"),
-        Output("summary-licensor-npv", "children"),
-        Output("summary-peak-revenue", "children"),
-        Output("summary-peak-patients", "children"),
-        Output("summary-wacc", "children"),
-        Output("summary-licensee-rate", "children"),
-        Output("summary-licensor-rate", "children"),
-        Output("summary-approval-prob", "children"),
-        Output("summary-launch-year", "children"),
-        Output("summary-tax-rate", "children"),
-        Output("override-status", "children"),
-        Output("revenue-fcf-chart", "figure"),
-        Output("discounted-fcf-chart", "figure"),
-        Output("tornado-chart", "figure"),
-        Output("licensor-npv", "children"),
-        Output("licensor-total-milestones", "children"),
-        Output("licensor-total-royalties", "children"),
-        Output("licensor-total-deal-value", "children"),
-        Output("licensor-bridge-chart", "figure"),
-        Output("licensor-cashflow-chart", "figure"),
-        Input("manual-overrides", "data"),
-        *_assumption_states(),
-    )
-    def update_dcf(overrides, *assumption_values):
-        assumptions = _assumptions_from_values(assumption_values)
-        model = build_dcf_model(assumptions, overrides)
-        data = table_data(model)
-        columns = table_columns(model["years"])
-        summary = model["summary"]
-        currency = model["assumptions"]["currency"]
-        frame = model["frame"]
-        tornado_rows = run_sensitivity(assumptions, overrides)
-        licensor_bridge, licensor_annual = _licensor_figs(frame, summary, currency)
-
-        override_count = len(overrides or {})
-        override_text = f"{override_count} manual override{'s' if override_count != 1 else ''} active"
-        if override_count == 0:
-            override_text = "No manual overrides active"
-
-        model_summary = {
-            "assumptions": model["assumptions"],
-            "summary": summary,
-            "years": model["years"],
-        }
-
-        return (
-            columns,
-            data,
-            _table_styles(),
-            data,
-            model_summary,
-            _money(summary["rnpv"], currency),
-            _money(summary["licensee_enpv"], currency),
-            _money(summary["licensor_npv"], currency),
-            _money(summary["peak_revenue"], currency),
-            f"{summary['peak_patients']:,.2f}M",
-            _pct(summary["wacc"]),
-            _pct(summary["licensee_discount_rate"]),
-            _pct(summary["licensor_discount_rate"]),
-            _pct(summary["approval_probability"]),
-            str(summary["launch_year"]),
-            _pct(summary["tax_rate"]),
-            override_text,
-            _revenue_fig(frame, currency),
-            _discounted_fig(frame, currency),
-            _tornado_fig(tornado_rows, currency),
-            _money(summary["licensor_npv"], currency),
-            _money(summary["total_milestones"], currency),
-            _money(summary["total_royalties"], currency),
-            _money(summary["total_deal_value"], currency),
-            licensor_bridge,
-            licensor_annual,
+        return {
+            "ls_npvs": ls.tolist(), "lr_npvs": lr.tolist(),
+            "ls_stats": ls_s, "lr_stats": lr_s,
+            "base_rev": base["rev"].tolist(),
+            "base_fcf": base["fcf"].tolist(),
+            "base_rfcf": base["risk_adj_fcf"].tolist(),
+            "base_ebitda": base["ebitda"].tolist(),
+            "base_cogs": base["cogs"].tolist(),
+            "base_royalty": base["royalty"].tolist(),
+            "base_ptr": base["ptr"].tolist(),
+            "base_df_ls": base["df_ls"].tolist(),
+            "base_lf_cf": base["licensor_cf"].tolist(),
+            "base_enpv": base["licensee_enpv"],
+            "base_lr_npv": base["licensor_npv"],
+            "sens_rows": sens,
+        }, (
+            f"✅ {int(n_sims):,} iters  |  "
+            f"eNPV: ${base['licensee_enpv']:.1f}M  |  "
+            f"P>0: {ls_s['prob_pos']*100:.1f}%"
         )
 
+    # ==========================================================================
+    # Save / Delete / Export
+    # ==========================================================================
     @app.callback(
-        Output("mc-mean-rnpv", "children"),
-        Output("mc-median-rnpv", "children"),
-        Output("mc-p10-p90", "children"),
-        Output("mc-prob-positive", "children"),
-        Output("mc-histogram-chart", "figure"),
-        Output("simulation-results-store", "data"),
-        Input("active-page", "data"),
-        Input("manual-overrides", "data"),
-        Input("mc-sims", "value"),
-        Input("mc-wacc", "value"),
-        Input("mc-peak-pen", "value"),
-        Input("mc-price", "value"),
-        Input("mc-pos", "value"),
-        Input("mc-cost", "value"),
-        *_assumption_states(),
-    )
-    def update_monte_carlo(active_page, overrides, n_sims, mc_wacc, mc_peak_pen, mc_price, mc_pos, mc_cost, *assumption_values):
-        if active_page != "monte_carlo":
-            return no_update, no_update, no_update, no_update, no_update, no_update
-        assumptions = _assumptions_from_values(assumption_values)
-        currency = assumptions.get("currency", "USD")
-        ranges = {
-            "wacc": parse_low_base_high(mc_wacc, (10.0, 12.0, 15.0)),
-            "peak_penetration": parse_low_base_high(mc_peak_pen, (6.0, 10.0, 14.0)),
-            "price_per_unit": parse_low_base_high(mc_price, (750.0, 1000.0, 1250.0)),
-            "probability_success": parse_low_base_high(mc_pos, (10.0, 18.0, 30.0)),
-            "development_cost_multiplier": parse_low_base_high(mc_cost, (0.8, 1.0, 1.3)),
-        }
-        results = run_monte_carlo(assumptions, overrides, n_sims=n_sims, ranges=ranges)
-        stats = results["rnpv_stats"]
-        return (
-            _money(stats["mean"], currency),
-            _money(stats["p50"], currency),
-            f"{_money(stats['p10'], currency)} / {_money(stats['p90'], currency)}",
-            _pct(stats["prob_pos"]),
-            _mc_histogram(results, currency),
-            {
-                "n_sims": results["n_sims"],
-                "rnpv_stats": results["rnpv_stats"],
-                "licensee_stats": results["licensee_stats"],
-                "licensor_stats": results["licensor_stats"],
-            },
-        )
-
-    @app.callback(
-        Output("scenario-dropdown", "options"),
-        Input("saved-scenarios", "data"),
-    )
-    def update_scenario_dropdown(scenarios):
-        return scenario_options(scenarios)
-
-    @app.callback(
-        Output("saved-scenarios", "data"),
-        Output("scenario-status", "children"),
-        Input("save-scenario", "n_clicks"),
-        Input("delete-scenario", "n_clicks"),
+        Output("store-scenarios", "data"),
+        Output("save-status", "children"),
+        Input("btn-save", "n_clicks"),
         State("scenario-name", "value"),
-        State("scenario-dropdown", "value"),
-        State("saved-scenarios", "data"),
-        State("manual-overrides", "data"),
-        State("model-summary-store", "data"),
-        *_assumption_state_objects(),
+        State("in-pop", "value"), State("in-price", "value"),
+        State("in-pen", "value"), State("in-cogs", "value"),
+        State("in-tax", "value"), State("in-lsw", "value"),
+        State("in-lrw", "value"), State("p1", "value"),
+        State("p2", "value"), State("p3", "value"),
+        State("p4", "value"), State("in-upfront", "value"),
+        State("in-mil", "value"), State("store-scenarios", "data"),
         prevent_initial_call=True,
     )
-    def save_or_delete_scenario(_save_clicks, _delete_clicks, scenario_name, selected_name, scenarios, overrides, model_summary, *assumption_values):
-        scenarios = dict(scenarios or {})
-        trigger = ctx.triggered_id
-        if trigger == "delete-scenario":
-            if not selected_name or selected_name not in scenarios:
-                return scenarios, "Select a saved scenario to delete."
-            scenarios.pop(selected_name, None)
-            return scenarios, f"Deleted scenario: {selected_name}"
-
-        assumptions = _assumptions_from_values(assumption_values)
-        scenario = make_scenario(scenario_name, assumptions, overrides, (model_summary or {}).get("summary", {}))
-        scenarios[scenario["name"]] = scenario
-        return scenarios, f"Saved scenario: {scenario['name']}"
+    def save_scenario(n_clicks, name, pop, price, pen, cogs, tax,
+                      lsw, lrw, p1, p2, p3, p4, upfront, mil, data):
+        if not name or not name.strip():
+            return data or {}, "❌ Enter a name"
+        n = name.strip()
+        s = data or {}
+        s[n] = {
+            "eu_pop": float(pop or 450), "price": float(price or 15000),
+            "pen": float(pen or 5), "cogs": float(cogs or 12),
+            "tax": float(tax or 21), "lsw": float(lsw or 10),
+            "lrw": float(lrw or 14), "p1": float(p1 or 63),
+            "p2": float(p2 or 30), "p3": float(p3 or 58),
+            "p4": float(p4 or 90), "upfront": float(upfront or 2),
+            "mil": float(mil or 1),
+            "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        return s, f"✅ Saved: {n}"
 
     @app.callback(
-        [Output(component_id, "value") for _, component_id in ASSUMPTION_INPUTS]
-        + [
-            Output("manual-overrides", "data", allow_duplicate=True),
-            Output("scenario-status", "children", allow_duplicate=True),
-        ],
-        Input("load-scenario", "n_clicks"),
-        State("scenario-dropdown", "value"),
-        State("saved-scenarios", "data"),
+        Output("store-scenarios", "data"),
+        Output("save-status", "children"),
+        Input("btn-delete", "n_clicks"),
+        State("load-scenario-dropdown", "value"),
+        State("store-scenarios", "data"),
         prevent_initial_call=True,
     )
-    def load_scenario(_clicks, selected_name, scenarios):
-        if not selected_name or not scenarios or selected_name not in scenarios:
-            return [no_update for _ in ASSUMPTION_INPUTS] + [no_update, "Select a saved scenario to load."]
-        scenario = scenarios[selected_name]
-        assumptions = scenario.get("assumptions", {})
-        values = [assumptions.get(name, DEFAULT_ASSUMPTIONS.get(name)) for name, _ in ASSUMPTION_INPUTS]
-        return values + [scenario.get("overrides", {}), f"Loaded scenario: {selected_name}"]
+    def delete_scenario(n_clicks, name, data):
+        if not name or not data or name not in data:
+            return data or {}, "❌ Select a scenario"
+        return {k: v for k, v in data.items() if k != name}, f"🗑️ Deleted: {name}"
 
     @app.callback(
         Output("download-export", "data"),
-        Input("export-scenario", "n_clicks"),
+        Input("btn-export", "n_clicks"),
         State("scenario-name", "value"),
-        State("manual-overrides", "data"),
-        State("model-summary-store", "data"),
-        State("simulation-results-store", "data"),
-        *_assumption_state_objects(),
+        State("in-pop", "value"), State("in-price", "value"),
+        State("in-pen", "value"), State("in-cogs", "value"),
+        State("in-tax", "value"), State("in-lsw", "value"),
+        State("in-lrw", "value"), State("p1", "value"),
+        State("p2", "value"), State("p3", "value"),
+        State("p4", "value"), State("in-upfront", "value"),
+        State("in-mil", "value"), State("store-results", "data"),
         prevent_initial_call=True,
     )
-    def export_scenario(_clicks, scenario_name, overrides, model_summary, simulation_summary, *assumption_values):
-        assumptions = _assumptions_from_values(assumption_values)
-        payload = export_payload(
-            scenario_name,
-            assumptions,
-            overrides,
-            (model_summary or {}).get("summary", {}),
-            simulation_summary,
+    def export(n_clicks, name, pop, price, pen, cogs, tax, lsw, lrw,
+               p1, p2, p3, p4, upfront, mil, results):
+        n = name or "Export"
+        d = {
+            "scenario_name": n, "exported_at": datetime.now().isoformat(),
+            "assumptions": {
+                "eu_pop": float(pop or 450), "price": float(price or 15000),
+                "penetration": float(pen or 5), "cogs_pct": float(cogs or 12),
+                "tax_rate": float(tax or 21), "licensee_wacc": float(lsw or 10),
+                "licensor_wacc": float(lrw or 14), "ph1_to_ph2": float(p1 or 63),
+                "ph2_to_ph3": float(p2 or 30), "ph3_to_nda": float(p3 or 58),
+                "nda_approval": float(p4 or 90), "upfront": float(upfront or 2),
+                "milestones": float(mil or 1),
+            },
+            "results": results or {},
+        }
+        return dcc.send_string(json.dumps(d, indent=2), f"{n}_NPV_Analysis.json")
+
+    # ==========================================================================
+    # Summary cards
+    # ==========================================================================
+    @app.callback(
+        Output("summary-lic-mean", "children"),
+        Output("summary-lic-prob", "children"),
+        Output("summary-lr-mean", "children"),
+        Output("summary-lr-prob", "children"),
+        Input("store-results", "data"),
+    )
+    def update_cards(data):
+        if not data:
+            e = kpi_card("—", "—")
+            return e, e, e, e
+        ls, lr = data["ls_stats"], data["lr_stats"]
+        return (
+            kpi_card("Licensee Mean eNPV", f"${ls['mean']:.1f}M", COLORS["blue"],
+                     f"P5: ${ls['p5']:.1f}M  |  P95: ${ls['p95']:.1f}M"),
+            kpi_card("P(Licensee eNPV > 0)", f"{ls['prob_pos']*100:.1f}%", COLORS["green"],
+                     f"Median: ${ls['p50']:.1f}M"),
+            kpi_card("Licensor Deal NPV", f"${lr['mean']:.1f}M", COLORS["teal"],
+                     f"P5: ${lr['p5']:.1f}M  |  P95: ${lr['p95']:.1f}M"),
+            kpi_card("P(Licensor NPV > 0)", f"{lr['prob_pos']*100:.1f}%", COLORS["amber"],
+                     f"Median: ${lr['p50']:.1f}M"),
         )
-        filename = f"{payload['scenario_name'].replace(' ', '_')}_valuation_export.json"
-        return dcc.send_string(json.dumps(payload, indent=2), filename)
+
+    # ==========================================================================
+    # Sidebar mini DCF
+    # ==========================================================================
+    @app.callback(
+        Output("sidebar-dcf-mini", "children"),
+        Input("store-results", "data"),
+    )
+    def update_sidebar_dcf(data):
+        if not data:
+            return html.Span("Run simulation", style={"fontSize": "0.75rem", "color": "#667085"})
+
+        base_mock = {k: np.array(data[k]) for k in
+                     ["base_rev", "base_cogs", "base_ebitda", "base_royalty",
+                      "base_fcf", "base_rfcf", "base_ptr", "base_df_ls"]}
+        from ui import build_dcf_table
+        columns, rows, metric_rows = build_dcf_table(base_mock)
+
+        total = data["base_enpv"]
+        table = dash_table.DataTable(
+            data=rows, columns=columns,
+            style_table={"fontSize": "9px", "overflowX": "auto"},
+            style_cell={"fontFamily": "monospace", "fontSize": "9px", "padding": "1px 3px",
+                        "border": "1px solid #e9ecef", "textAlign": "right",
+                        "minWidth": "38px", "maxWidth": "48px"},
+            style_header={"backgroundColor": "#1f6feb", "color": "white", "fontSize": "9px",
+                          "fontWeight": "700", "padding": "2px 2px"},
+            style_data_conditional=[
+                {"if": {"column_id": "Line Item"},
+                 "fontWeight": "600", "textAlign": "left",
+                 "minWidth": "90px", "maxWidth": "90px", "fontSize": "9px"},
+            ],
+            fixed_columns={"headers": True, "data": 1},
+            page_action="none",
+        )
+        return html.Div([
+            html.Div(f"eNPV: ${total:.1f}M  |  Lic: ${data['base_lr_npv']:.1f}M",
+                     style={"fontSize": "10px", "fontWeight": "700", "color": "#1f6feb",
+                            "padding": "4px", "backgroundColor": "#eef1f5", "borderRadius": "4px",
+                            "marginBottom": "4px"}),
+            table,
+        ])
+
+    # ==========================================================================
+    # Charts
+    # ==========================================================================
+    @app.callback(
+        Output("cf-chart", "figure"),
+        Input("store-results", "data"),
+    )
+    def update_cf_chart(data):
+        if not data:
+            return go.Figure()
+        rev = data["base_rev"]
+        rfcf = data["base_rfcf"]
+        ebit = data["base_ebitda"]
+        cogs = data["base_cogs"]
+        rd_arr = np.array([RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)])
+
+        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                            subplot_titles=("Revenue Build-Up ($M)", "Risk-Adjusted FCF vs EBITDA ($M)"),
+                            vertical_spacing=0.12, row_heights=[0.55, 0.45])
+        fig.add_trace(go.Bar(x=YEARS, y=rev, name="Gross Revenue", marker_color=COLORS["blue"], opacity=0.85), row=1, col=1)
+        fig.add_trace(go.Bar(x=YEARS, y=[-v for v in cogs], name="COGS", marker_color=COLORS["red"], opacity=0.7), row=1, col=1)
+        fig.add_trace(go.Bar(x=YEARS, y=[-v for v in rd_arr], name="R&D", marker_color="#667085", opacity=0.7), row=1, col=1)
+        fig.add_trace(go.Scatter(x=YEARS, y=ebit, name="EBITDA",
+                                 line=dict(color=COLORS["amber"], width=2.5), mode="lines+markers"), row=1, col=1)
+        colors_fcf = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in rfcf]
+        fig.add_trace(go.Bar(x=YEARS, y=rfcf, name="Risk-Adj FCF", marker_color=colors_fcf, opacity=0.85), row=2, col=1)
+        fig.add_trace(go.Scatter(x=YEARS, y=list(np.cumsum(rfcf)), name="Cumulative",
+                                 line=dict(color=COLORS["blue"], width=2, dash="dot")), row=2, col=1)
+        fig.add_hline(y=0, line_width=1, line_color="black", opacity=0.4, row=2, col=1)
+        fig.update_layout(template="plotly_white", height=500,
+                          legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
+                          margin=dict(t=50, b=30))
+        return fig
+
+    @app.callback(
+        Output("mc-chart", "figure"),
+        Input("store-results", "data"),
+    )
+    def update_mc_chart(data):
+        if not data:
+            return go.Figure()
+        ls, lr = np.array(data["ls_npvs"]), np.array(data["lr_npvs"])
+        ls_s, lr_s = data["ls_stats"], data["lr_stats"]
+
+        fig = make_subplots(rows=2, cols=2,
+                            subplot_titles=("Licensee eNPV", "Licensor NPV",
+                                            "S-Curve", "Percentiles"),
+                            vertical_spacing=0.18, horizontal_spacing=0.1)
+        fig.add_trace(go.Histogram(x=ls, nbinsx=60, name="Licensee",
+                                   marker_color=COLORS["blue"], opacity=0.75), row=1, col=1)
+        fig.add_vline(x=ls_s["mean"], line_color=COLORS["amber"], line_width=2, line_dash="dash", row=1, col=1)
+        fig.add_vline(x=0, line_color="black", line_width=1, row=1, col=1)
+
+        fig.add_trace(go.Histogram(x=lr, nbinsx=60, name="Licensor",
+                                   marker_color=COLORS["teal"], opacity=0.75), row=1, col=2)
+        fig.add_vline(x=lr_s["mean"], line_color=COLORS["amber"], line_width=2, line_dash="dash", row=1, col=2)
+        fig.add_vline(x=0, line_color="black", line_width=1, row=1, col=2)
+
+        n = len(ls)
+        cdf = np.arange(1, n + 1) / n
+        fig.add_trace(go.Scatter(x=np.sort(ls), y=cdf * 100, name="Licensee CDF",
+                                 line=dict(color=COLORS["blue"], width=2)), row=2, col=1)
+        fig.add_trace(go.Scatter(x=np.sort(lr), y=cdf * 100, name="Licensor CDF",
+                                 line=dict(color=COLORS["teal"], width=2)), row=2, col=1)
+        fig.add_hline(y=50, line_color="#667085", line_dash="dot", row=2, col=1)
+
+        pcts = ["P5", "P10", "P25", "P50", "P75", "P90", "P95"]
+        ls_v = [ls_s[p] for p in ["p5", "p10", "p25", "p50", "p75", "p90", "p95"]]
+        lr_v = [lr_s[p] for p in ["p5", "p10", "p25", "p50", "p75", "p90", "p95"]]
+        fig.add_trace(go.Bar(x=pcts, y=ls_v, name="Licensee", marker_color=COLORS["blue"]), row=2, col=2)
+        fig.add_trace(go.Bar(x=pcts, y=lr_v, name="Licensor", marker_color=COLORS["teal"]), row=2, col=2)
+
+        fig.update_layout(template="plotly_white", height=600,
+                          legend=dict(orientation="h", y=1.04, x=0.5, xanchor="center"),
+                          margin=dict(t=60, b=30))
+        fig.add_annotation(text=f"P>0 = {ls_s['prob_pos']*100:.1f}%",
+                           xref="x domain", yref="y domain", x=0.98, y=0.92,
+                           showarrow=False, font=dict(color=COLORS["blue"], size=11), row=1, col=1)
+        return fig
+
+    @app.callback(
+        Output("bridge-chart", "figure"),
+        Output("bridge-annual-chart", "figure"),
+        Input("store-results", "data"),
+    )
+    def update_bridge(data):
+        if not data:
+            return go.Figure(), go.Figure()
+        lf_cf = np.array(data["base_lf_cf"])
+        df_lr = np.array([(1 / (1 + 0.14)) ** i for i in range(N_YEARS)])
+        disc = lf_cf * df_lr
+        up = disc[0]
+        ms = sum(disc[i] for i in [2, 4, 6] if i < N_YEARS)
+        roy = sum(disc[i] for i in range(N_YEARS) if i not in [0, 2, 4, 6] and disc[i] > 0)
+
+        fig1 = go.Figure(go.Waterfall(
+            x=["Upfront", "Milestones", "Royalty", "Total"],
+            measure=["relative", "relative", "relative", "total"],
+            y=[up, ms, roy, 0],
+            text=[f"${up:.1f}M", f"${ms:.1f}M", f"${roy:.1f}M", f"${data['base_lr_npv']:.1f}M"],
+            textposition="inside",
+            connector={"line": {"color": "#ccc"}},
+            increasing={"marker": {"color": COLORS["blue"]}},
+            totals={"marker": {"color": COLORS["teal"]}},
+        ))
+        fig1.update_layout(template="plotly_white", height=340,
+                           title=f"Licensor NPV Bridge — ${data['base_lr_npv']:.1f}M",
+                           margin=dict(t=40, b=20))
+
+        colors_lc = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lf_cf]
+        fig2 = go.Figure()
+        fig2.add_trace(go.Bar(x=list(YEARS), y=list(lf_cf), name="Cash Flow", marker_color=colors_lc))
+        fig2.add_trace(go.Scatter(x=list(YEARS), y=list(np.cumsum(disc)), name="Cum. PV",
+                                  line=dict(color=COLORS["amber"], width=2)))
+        fig2.update_layout(template="plotly_white", height=280,
+                           title="Annual Licensor CF", margin=dict(t=30, b=20))
+        return fig1, fig2
+
+    @app.callback(
+        Output("tornado-chart", "figure"),
+        Output("price-sens-chart", "figure"),
+        Input("store-results", "data"),
+    )
+    def update_sens(data):
+        if not data:
+            return go.Figure(), go.Figure()
+        sens = data["sens_rows"]
+        base_e = data["base_enpv"]
+
+        labels = [r["label"] for r in sens]
+        lo = [r["npv_lo"] for r in sens]
+        hi = [r["npv_hi"] for r in sens]
+        order = np.argsort([abs(h - l) for l, h in zip(lo, hi)])
+
+        fig1 = go.Figure()
+        for i in order:
+            lb, lv, hv = labels[i], lo[i], hi[i]
+            fig1.add_trace(go.Bar(y=[lb], x=[max(lv, hv) - base_e], name="Upside",
+                                  orientation="h", marker_color=COLORS["blue"], showlegend=False))
+            fig1.add_trace(go.Bar(y=[lb], x=[min(lv, hv) - base_e], name="Downside",
+                                  orientation="h", marker_color=COLORS["red"], showlegend=False))
+        fig1.add_vline(x=0, line_color="black", line_width=1.5)
+        fig1.update_layout(template="plotly_white", height=360,
+                           title=f"Tornado (Base: ${base_e:.1f}M)",
+                           xaxis_title="Δ eNPV ($M)", margin=dict(l=140, t=40, b=20))
+
+        prices = np.linspace(5000, 40000, 50)
+        enpv = []
+        for pv in prices:
+            p = ScenarioParams(eu_pop=450, ts=0.09, dr=0.80, tr=0.50,
+                               cogs=0.12, ga=0.01, tax=0.21, upfront=2.0,
+                               p1=0.63, p2=0.30, p3=0.58, p4=0.90, peak_pen=0.05)
+            enpv.append(run_scenario(0.002, 0.05, pv, 0.10, 0.14, p)["licensee_enpv"])
+
+        fig2 = go.Figure()
+        fig2.add_trace(go.Scatter(x=prices / 1000, y=enpv, mode="lines",
+                                  line=dict(color=COLORS["blue"], width=2.5),
+                                  fill="tozeroy", fillcolor="rgba(31,111,235,0.1)"))
+        fig2.add_hline(y=0, line_color="black", line_dash="dash")
+        fig2.update_layout(template="plotly_white", height=260,
+                           title="Price Sensitivity",
+                           xaxis_title="Price ($K/patient/yr)",
+                           yaxis_title="eNPV ($M)", margin=dict(t=30, b=20))
+        return fig1, fig2
