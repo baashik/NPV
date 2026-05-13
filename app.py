@@ -1,5 +1,5 @@
 """
-GATX-11 Biopharma Licensing NPV Dashboard
+Biopharma Licensing Monte Carlo NPV Dashboard
 Licensor (Biotech) ↔ Licensee (Pharma Partner) | EU Exclusive License
 """
 
@@ -401,7 +401,7 @@ app.layout = dbc.Container([
     # ── Header ──────────────────────────────────────────────────────────
     dbc.Row([
         dbc.Col([
-            html.H3("🧬 GATX-11 Biopharma Licensing — NPV Dashboard",
+            html.H3("Biopharma Licensing Monte Carlo NPV Dashboard",
                     style={"fontWeight": "800", "color": "#1a1a2e", "marginBottom": "2px"}),
             html.Small("Fibrosis · Phase I · EU Exclusive License  |  Licensor ↔ Licensee Monte Carlo Simulation",
                        style={"color": "#666"}),
