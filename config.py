@@ -27,7 +27,7 @@ ADOPTION_ARRAY: np.ndarray = np.array(
     [ADOPTION_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)]
 )
 
-RD_SCHEDULE: Dict[int, float] = {0: 2.0, 1: 3.0, 2: 2.0, 3: 3.0, 4: 3.0, 5: 3.0, 6: 2.0}
+RD_SCHEDULE: Dict[int, float] = {0: 4.0, 1: 5.0, 2: 5.0, 3: 7.0, 4: 7.0, 5: 7.0, 6: 2.0, 7: 0.0}
 RD_ARRAY: np.ndarray = np.array(
     [RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)]
 )
@@ -64,18 +64,18 @@ COLORS: Dict[str, str] = {
 @dataclass
 class ScenarioParams:
     eu_pop:     float = 450.0
-    ts:         float = 0.09        # target share
-    dr:         float = 0.80        # diagnosis rate
-    tr:         float = 0.50        # treatment rate
-    cogs:       float = 0.12
-    ga:         float = 0.01
-    tax:        float = 0.21
+    ts:         float = 0.09        # target share (9% of EU population)
+    dr:         float = 0.80        # diagnosis rate (80%)
+    tr:         float = 0.50        # treatment rate (50%)
+    cogs:       float = 0.12        # COGS % of revenue
+    ga:         float = 0.01        # G&A / OpEx % of revenue
+    tax:        float = 0.21        # tax rate
     upfront:    float = 2.0
-    p1:         float = 0.63
-    p2:         float = 0.30
-    p3:         float = 0.58
-    p4:         float = 0.90
-    peak_pen:   float = 0.05
+    p1:         float = 0.63         # Phase I success (63%)
+    p2:         float = 0.30         # Phase II success (30%)
+    p3:         float = 0.58         # Phase III success (58%)
+    p4:         float = 0.90         # Approval success (90%)
+    peak_pen:   float = 0.05         # peak market penetration (5%)
     asset_discount_rate: float = 0.12  # Core DCF / standalone product rNPV
     licensee_wacc:         float = 0.10  # Licensee Model
     licensor_discount_rate: float = 0.14  # Licensor Model
