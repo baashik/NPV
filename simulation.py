@@ -13,18 +13,27 @@ def parse_low_base_high(value: Any, default: tuple[float, float, float]) -> tupl
     if value is None:
         return default
     if isinstance(value, (list, tuple)) and len(value) == 3:
-        return tuple(float(v) for v in value)
+        try:
+            low, base, high = (float(v) for v in value)
+        except (TypeError, ValueError):
+            return default
+    else:
+        parts = str(value).replace(",", "").replace("%", "").replace("|", "/").split("/")
+        if len(parts) != 3:
+            return default
+        try:
+            low, base, high = (float(part.strip()) for part in parts)
+        except ValueError:
+            return default
 
-    parts = str(value).replace(",", "").replace("%", "").replace("|", "/").split("/")
-    if len(parts) != 3:
-        return default
-    try:
-        low, base, high = (float(part.strip()) for part in parts)
-    except ValueError:
-        return default
     if low > high:
         low, high = high, low
+    if low == high:
+        return default
+
     base = min(max(base, low), high)
+    if base <= low or base >= high:
+        base = low + (high - low) / 2
     return low, base, high
 
 
@@ -79,9 +88,22 @@ def run_monte_carlo(
     rng = np.random.default_rng(seed)
     n_sims = max(100, min(int(n_sims or 5000), 50000))
 
-    wacc_range = ranges.get("wacc", (base["wacc"] * 0.8, base["wacc"], base["wacc"] * 1.25))
-    peak_range = ranges.get("peak_penetration", (base["peak_penetration"] * 0.6, base["peak_penetration"], base["peak_penetration"] * 1.4))
-    price_range = ranges.get("price_per_unit", (base["price_per_unit"] * 0.75, base["price_per_unit"], base["price_per_unit"] * 1.25))
+    wacc_range = ranges.get(
+        "wacc",
+        (
+            base["asset_discount_rate"] * 0.8,
+            base["asset_discount_rate"],
+            base["asset_discount_rate"] * 1.25,
+        ),
+    )
+    peak_range = ranges.get(
+        "peak_penetration",
+        (base["peak_penetration"] * 0.6, base["peak_penetration"], base["peak_penetration"] * 1.4),
+    )
+    price_range = ranges.get(
+        "price_per_unit",
+        (base["price_per_unit"] * 0.75, base["price_per_unit"], base["price_per_unit"] * 1.25),
+    )
     prob_range = ranges.get("probability_success", (10.0, max(_clinical_probability(base) * 100, 1.0), 35.0))
     cost_range = ranges.get("development_cost_multiplier", (0.8, 1.0, 1.3))
 
@@ -91,8 +113,8 @@ def run_monte_carlo(
 
     for _ in range(n_sims):
         sampled = dict(base)
-        sampled["wacc"] = float(rng.triangular(*wacc_range))
-        sampled["licensee_discount_rate"] = sampled["wacc"]
+        sampled["asset_discount_rate"] = float(rng.triangular(*wacc_range))
+        sampled["licensee_wacc"] = sampled["asset_discount_rate"]
         sampled["licensor_discount_rate"] = float(np.clip(rng.normal(base["licensor_discount_rate"], 2.0), 4.0, 30.0))
         sampled["peak_penetration"] = float(rng.triangular(*peak_range))
         sampled["price_per_unit"] = float(max(rng.triangular(*price_range), 1.0))
@@ -126,8 +148,8 @@ def run_sensitivity(assumptions: dict[str, Any], overrides: dict[str, Any] | Non
     drivers = [
         ("Peak Penetration", "peak_penetration", 0.70, 1.30),
         ("Price Per Unit", "price_per_unit", 0.75, 1.25),
-        ("Asset WACC", "wacc", 0.80, 1.25),
-        ("Licensee Discount Rate", "licensee_discount_rate", 0.80, 1.25),
+        ("Asset Discount Rate", "asset_discount_rate", 0.80, 1.25),
+        ("Licensee WACC", "licensee_wacc", 0.80, 1.25),
         ("Phase II Success", "phase_ii_success", 0.70, 1.30),
         ("COGS %", "cogs_pct", 0.75, 1.25),
         ("Tax Rate", "tax_rate", 0.75, 1.25),
