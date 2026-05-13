@@ -647,3 +647,160 @@ def table_data(model: dict[str, Any]) -> list[dict[str, Any]]:
 
 def row_format_map() -> dict[str, str]:
     return {row_key: fmt for row_key, _, fmt, _ in ROW_DEFS}
+
+
+def run_sensitivity(base_assumptions: dict[str, Any], overrides: dict[str, Any] | None = None,
+                    selected_metric: str = "core_dcf_npv") -> pd.DataFrame:
+    """
+    One-way sensitivity analysis on the deterministic DCF model.
+    Tests each variable at low / base / high values and measures NPV impact.
+
+    Parameters
+    ----------
+    base_assumptions : dict
+        Full assumptions dict (as from clean_assumptions).
+    overrides : dict, optional
+        Manual overrides to pass through.
+    selected_metric : str
+        Which NPV to compute per scenario.
+        Options: "core_dcf_npv" | "licensee_npv" | "licensor_npv"
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        variable, low_case, base_case, high_case,
+        low_npv, base_npv, high_npv,
+        delta_low, delta_high, absolute_impact
+    """
+    base_assumptions = clean_assumptions(base_assumptions)
+
+    SENS_VARS = {
+        "Asset Discount Rate": {
+            "key": "asset_discount_rate",
+            "base": base_assumptions["asset_discount_rate"] / 100,
+            "low": base_assumptions["asset_discount_rate"] / 100 - 0.02,
+            "high": base_assumptions["asset_discount_rate"] / 100 + 0.02,
+            "fmt": "pct",
+        },
+        "Peak Penetration": {
+            "key": "peak_penetration",
+            "base": base_assumptions["peak_penetration"] / 100,
+            "low": base_assumptions["peak_penetration"] / 100 * 0.75,
+            "high": base_assumptions["peak_penetration"] / 100 * 1.25,
+            "fmt": "pct",
+        },
+        "Price Per Unit": {
+            "key": "price_per_unit",
+            "base": base_assumptions["price_per_unit"],
+            "low": base_assumptions["price_per_unit"] * 0.75,
+            "high": base_assumptions["price_per_unit"] * 1.25,
+            "fmt": "price",
+        },
+        "Launch Year": {
+            "key": "launch_year",
+            "base": float(base_assumptions["launch_year"]),
+            "low": float(base_assumptions["launch_year"] - 1),
+            "high": float(base_assumptions["launch_year"] + 1),
+            "fmt": "int",
+        },
+        "Ph1 → Ph2": {
+            "key": "phase_i_success",
+            "base": base_assumptions["phase_i_success"] / 100,
+            "low": max(0.01, base_assumptions["phase_i_success"] / 100 - 0.20),
+            "high": min(1.00, base_assumptions["phase_i_success"] / 100 + 0.20),
+            "fmt": "pct",
+        },
+        "Ph2 → Ph3": {
+            "key": "phase_ii_success",
+            "base": base_assumptions["phase_ii_success"] / 100,
+            "low": max(0.01, base_assumptions["phase_ii_success"] / 100 - 0.20),
+            "high": min(1.00, base_assumptions["phase_ii_success"] / 100 + 0.20),
+            "fmt": "pct",
+        },
+        "Ph3 → NDA": {
+            "key": "phase_iii_success",
+            "base": base_assumptions["phase_iii_success"] / 100,
+            "low": max(0.01, base_assumptions["phase_iii_success"] / 100 - 0.20),
+            "high": min(1.00, base_assumptions["phase_iii_success"] / 100 + 0.20),
+            "fmt": "pct",
+        },
+        "NDA → Approval": {
+            "key": "approval_success",
+            "base": base_assumptions["approval_success"] / 100,
+            "low": max(0.01, base_assumptions["approval_success"] / 100 - 0.20),
+            "high": min(1.00, base_assumptions["approval_success"] / 100 + 0.20),
+            "fmt": "pct",
+        },
+        "COGS %": {
+            "key": "cogs_pct",
+            "base": base_assumptions["cogs_pct"] / 100,
+            "low": base_assumptions["cogs_pct"] / 100 * 0.75,
+            "high": base_assumptions["cogs_pct"] / 100 * 1.25,
+            "fmt": "pct",
+        },
+        "Target Patient %": {
+            "key": "target_patient_pct",
+            "base": base_assumptions["target_patient_pct"] / 100,
+            "low": base_assumptions["target_patient_pct"] / 100 * 0.75,
+            "high": base_assumptions["target_patient_pct"] / 100 * 1.25,
+            "fmt": "pct",
+        },
+    }
+
+    base_model = build_dcf_model(base_assumptions, overrides)
+    if selected_metric == "licensee_npv":
+        base_npv = base_model["summary"]["licensee_npv"]
+    elif selected_metric == "licensor_npv":
+        base_npv = base_model["summary"]["licensor_npv"]
+    else:
+        base_npv = base_model["summary"]["rnpv"]
+
+    rows = []
+    for label, cfg in SENS_VARS.items():
+        key = cfg["key"]
+        npv_vals = {"low": None, "base": None, "high": None}
+
+        for case_name, case_val in {"low": cfg["low"], "base": cfg["base"], "high": cfg["high"]}.items():
+            assumptions = {**base_assumptions, key: case_val}
+            model = build_dcf_model(assumptions, overrides)
+            if selected_metric == "licensee_npv":
+                npv = model["summary"]["licensee_npv"]
+            elif selected_metric == "licensor_npv":
+                npv = model["summary"]["licensor_npv"]
+            else:
+                npv = model["summary"]["rnpv"]
+            npv_vals[case_name] = npv
+
+        npv_base = npv_vals["base"]
+        npv_low = npv_vals["low"]
+        npv_high = npv_vals["high"]
+
+        delta_low = npv_low - npv_base
+        delta_high = npv_high - npv_base
+        abs_impact = max(abs(delta_low), abs(delta_high))
+
+        if cfg["fmt"] == "pct":
+            def fmt(v): return f"{v * 100:.1f}%"
+        elif cfg["fmt"] == "price":
+            def fmt(v): return f"${v:,.0f}"
+        elif cfg["fmt"] == "int":
+            def fmt(v): return f"{int(v)}"
+        else:
+            def fmt(v): return f"{v:.2f}"
+
+        rows.append({
+            "variable": label,
+            "low_case": fmt(cfg["low"]),
+            "base_case": fmt(cfg["base"]),
+            "high_case": fmt(cfg["high"]),
+            "low_npv": npv_low,
+            "base_npv": npv_base,
+            "high_npv": npv_high,
+            "delta_low": delta_low,
+            "delta_high": delta_high,
+            "absolute_impact": abs_impact,
+        })
+
+    df = pd.DataFrame(rows)
+    df = df.sort_values("absolute_impact", ascending=False).reset_index(drop=True)
+    return df

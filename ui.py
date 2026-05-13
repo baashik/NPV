@@ -7,6 +7,7 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
 from config import COLORS as C, N_YEARS, YEARS, RD_SCHEDULE
+from model_engine import DEFAULT_ASSUMPTIONS
 from styles import COLORS, CARD, PAGE, SIDEBAR, CONTENT, SMALL_LABEL
 
 
@@ -47,7 +48,7 @@ def sidebar():
             dbc.NavLink("Licensee Model", id="nav-licensee", active=False, n_clicks=0),
             dbc.NavLink("Licensor Bridge", id="nav-bridge", active=False, n_clicks=0),
             dbc.NavLink("Monte Carlo", id="nav-mc", active=False, n_clicks=0),
-            dbc.NavLink("Tornado", id="nav-sens", active=False, n_clicks=0),
+            dbc.NavLink("Sensitivity", id="nav-sens", active=False, n_clicks=0),
         ], vertical=True, pills=True, className="mb-3"),
         html.Hr(),
         html.Div("DCF Table", style={"fontWeight": "700", "fontSize": "0.78rem", "color": COLORS["muted"], "margin": "8px 0"}),
@@ -237,11 +238,42 @@ def sens_page():
     return html.Div([
         summary_cards("sens"),
         html.Div([
-            dbc.Card(dbc.CardBody(dcc.Graph(id="tornado-chart", config={"displayModeBar": False})),
+            html.H5("Sensitivity / Tornado", style={"fontWeight": "800", "marginBottom": "10px"}),
+            dbc.Row([
+                dbc.Col([
+                    field("Metric",
+                          dcc.Dropdown(id="sens-metric", value="core_dcf_npv",
+                                       options=[
+                                           {"label": "Core DCF NPV", "value": "core_dcf_npv"},
+                                           {"label": "Licensee eNPV", "value": "licensee_npv"},
+                                           {"label": "Licensor NPV", "value": "licensor_npv"},
+                                       ],
+                                       clearable=False, style={"fontSize": "0.86rem"})),
+                ], lg=3, md=4),
+                dbc.Col(html.Div(id="sens-base-npv", style={"fontSize": "1rem", "fontWeight": "800",
+                                                           "paddingTop": "22px", "color": COLORS["blue"]}), lg=2, md=3),
+            ], className="g-2 mb-3", style={"marginBottom": "14px"}),
+            dbc.Card(dbc.CardBody(dcc.Graph(id="sensitivity-tornado-chart", config={"displayModeBar": False})),
                      style={**CARD, "padding": "8px", "marginBottom": "14px"}),
-            dbc.Card(dbc.CardBody(dcc.Graph(id="price-sens-chart", config={"displayModeBar": False})),
-                     style={**CARD, "padding": "8px"}),
-        ]),
+            dash_table.DataTable(
+                id="sensitivity-table",
+                columns=[],
+                data=[],
+                editable=False,
+                merge_duplicate_headers=True,
+                page_action="none",
+                style_table={"fontSize": "0.8rem"},
+                style_cell={"fontFamily": "monospace", "fontSize": "0.78rem",
+                            "padding": "3px 6px", "textAlign": "right",
+                            "border": "1px solid #e9ecef"},
+                style_header={"backgroundColor": "#1f6feb", "color": "white",
+                             "fontWeight": "700", "fontSize": "0.78rem"},
+                style_data_conditional=[
+                    {"if": {"column_id": "Variable"},
+                     "textAlign": "left", "fontWeight": "600"},
+                ],
+            ),
+        ], style={**CARD, "padding": "16px"}),
     ])
 
 

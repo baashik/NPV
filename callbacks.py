@@ -9,7 +9,8 @@ import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
 from config import ScenarioParams, N_YEARS, YEARS, COLORS, RD_SCHEDULE, build_params
-from engine import run_scenario, run_montecarlo, npv_stats, run_sensitivity, ROYALTY_TIERS_DEFAULT
+from engine import run_scenario, run_montecarlo, npv_stats, run_sensitivity as eng_run_sensitivity, ROYALTY_TIERS_DEFAULT
+from model_engine import run_sensitivity, clean_assumptions, DEFAULT_ASSUMPTIONS
 from styles import CARD
 
 
@@ -256,7 +257,6 @@ def register_callbacks(app):
         ls, lr = run_montecarlo(int(n_sims or 5000), params, float(price or 15000))
         ls_s = npv_stats(ls)
         lr_s = npv_stats(lr)
-        sens = run_sensitivity(params, float(price or 15000), base["licensee_enpv"])
 
         return {
             "ls_npvs": ls.tolist(), "lr_npvs": lr.tolist(),
@@ -274,7 +274,6 @@ def register_callbacks(app):
             "base_rnpv": base["asset_rnpv"],
             "base_enpv": base["licensee_enpv"],
             "base_lr_npv": base["licensor_npv"],
-            "sens_rows": sens,
         }, (
             f"✅ {int(n_sims):,} iters  |  "
             f"rNPV: ${base['asset_rnpv']:.1f}M  |  "
@@ -652,52 +651,101 @@ def register_callbacks(app):
 
         return npv_str, mil_str, roy_str, deal_str, fig1, fig2
 
+    # ==========================================================================
+    # Sensitivity / Tornado
+    # ==========================================================================
     @app.callback(
-        Output("tornado-chart", "figure"),
-        Output("price-sens-chart", "figure"),
+        Output("sensitivity-tornado-chart", "figure"),
+        Output("sensitivity-table", "data"),
+        Output("sensitivity-table", "columns"),
+        Output("sens-base-npv", "children"),
         Input("store-results", "data"),
+        Input("sens-metric", "value"),
     )
-    def update_sens(data):
+    def update_sensitivity(data, metric):
         if not data:
-            return go.Figure(), go.Figure()
-        sens = data["sens_rows"]
-        base_e = data["base_enpv"]
+            return go.Figure(), [], [], ""
 
-        labels = [r["label"] for r in sens]
-        lo = [r["npv_lo"] for r in sens]
-        hi = [r["npv_hi"] for r in sens]
-        order = np.argsort([abs(h - l) for l, h in zip(lo, hi)])
+        metric_key = metric or "core_dcf_npv"
+        assumptions = dict(DEFAULT_ASSUMPTIONS)
 
-        fig1 = go.Figure()
-        for i in order:
-            lb, lv, hv = labels[i], lo[i], hi[i]
-            fig1.add_trace(go.Bar(y=[lb], x=[max(lv, hv) - base_e], name="Upside",
-                                  orientation="h", marker_color=COLORS["blue"], showlegend=False))
-            fig1.add_trace(go.Bar(y=[lb], x=[min(lv, hv) - base_e], name="Downside",
-                                  orientation="h", marker_color=COLORS["red"], showlegend=False))
-        fig1.add_vline(x=0, line_color="black", line_width=1.5)
-        fig1.update_layout(template="plotly_white", height=360,
-                           title=f"Tornado (Base: ${base_e:.1f}M)",
-                           xaxis_title="Δ eNPV ($M)", margin=dict(l=140, t=40, b=20))
+        assumptions["asset_discount_rate"] = 12.0
+        assumptions["licensee_wacc"] = 10.0
+        assumptions["licensor_discount_rate"] = 14.0
+        assumptions["peak_penetration"] = 5.0
+        assumptions["price_per_unit"] = 15000.0
+        assumptions["cogs_pct"] = 12.0
+        assumptions["target_patient_pct"] = 9.0
 
-        prices = np.linspace(5000, 40000, 50)
-        enpv = []
-        for pv in prices:
-            p = ScenarioParams(eu_pop=450, ts=0.09, dr=0.80, tr=0.50,
-                               cogs=0.12, ga=0.01, tax=0.21, upfront=2.0,
-                               p1=0.63, p2=0.30, p3=0.58, p4=0.90, peak_pen=0.05)
-            enpv.append(run_scenario(0.002, 0.05, pv, 0.10, 0.14, p)["licensee_enpv"])
+        df = run_sensitivity(assumptions, selected_metric=metric_key)
 
-        fig2 = go.Figure()
-        fig2.add_trace(go.Scatter(x=prices / 1000, y=enpv, mode="lines",
-                                  line=dict(color=COLORS["blue"], width=2.5),
-                                  fill="tozeroy", fillcolor="rgba(31,111,235,0.1)"))
-        fig2.add_hline(y=0, line_color="black", line_dash="dash")
-        fig2.update_layout(template="plotly_white", height=260,
-                           title="Price Sensitivity",
-                           xaxis_title="Price ($K/patient/yr)",
-                           yaxis_title="eNPV ($M)", margin=dict(t=30, b=20))
-        return fig1, fig2
+        base_rnpv = data.get("base_rnpv", 0.0)
+        base_enpv = data.get("base_enpv", 0.0)
+        base_lr_npv = data.get("base_lr_npv", 0.0)
+        if metric_key == "licensee_npv":
+            base_display = f"Base: ${base_enpv:.1f}M"
+        elif metric_key == "licensor_npv":
+            base_display = f"Base: ${base_lr_npv:.1f}M"
+        else:
+            base_display = f"Base: ${base_rnpv:.1f}M"
+
+        fig = go.Figure()
+        for _, row in df.iterrows():
+            base_npv = row["base_npv"]
+            lo_delta = row["delta_low"]
+            hi_delta = row["delta_high"]
+            label = row["variable"]
+
+            if lo_delta < 0:
+                lo_bar = lo_delta
+                hi_bar = hi_delta
+            else:
+                lo_bar = lo_delta
+                hi_bar = hi_delta
+
+            fig.add_trace(go.Bar(
+                y=[label], x=[lo_delta],
+                orientation="h", marker_color=COLORS["red"],
+                showlegend=False, name="Downside"
+            ))
+            fig.add_trace(go.Bar(
+                y=[label], x=[hi_delta],
+                orientation="h", marker_color=COLORS["blue"],
+                showlegend=False, name="Upside"
+            ))
+
+        fig.add_vline(x=0, line_color="black", line_width=1.5)
+        fig.update_layout(
+            template="plotly_white", height=400,
+            title=f"Tornado — {metric_key.replace('_', ' ').title()}",
+            xaxis_title="Δ NPV ($M)", margin=dict(l=160, t=40, b=30),
+            barmode="relative",
+            showlegend=False,
+        )
+
+        table_data = []
+        for _, row in df.iterrows():
+            table_data.append({
+                "Variable": row["variable"],
+                "Low": row["low_case"],
+                "Base": row["base_case"],
+                "High": row["high_case"],
+                "Δ Low": f"{row['delta_low']:.1f}",
+                "Δ High": f"{row['delta_high']:.1f}",
+                "Impact": f"{row['absolute_impact']:.1f}",
+            })
+
+        table_cols = [
+            {"name": "Variable", "id": "Variable"},
+            {"name": "Low Case", "id": "Low"},
+            {"name": "Base Case", "id": "Base"},
+            {"name": "High Case", "id": "High"},
+            {"name": "Δ Low ($M)", "id": "Δ Low"},
+            {"name": "Δ High ($M)", "id": "Δ High"},
+            {"name": "|Impact| ($M)", "id": "Impact"},
+        ]
+
+        return fig, table_data, table_cols, base_display
 
     # ==========================================================================
     # Licensee Model page
