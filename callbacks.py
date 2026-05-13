@@ -224,18 +224,27 @@ def register_callbacks(app):
         # --- Table ---
         columns = table_columns(years)
         tdata = table_data(model)
-        style_cond = [
-            {"if": {"row_key": k}, "backgroundColor": "#f0f4ff"}
-            for k in ["revenue", "gross_profit", "ebitda", "free_cash_flow", "rnpv"]
-        ]
-        style_cond += [
-            {"if": {"column_id": "y0"}, "borderLeft": "2px solid #1f6feb"},
-            {"if": {"row_key": "section_market"}, "fontWeight": "800", "backgroundColor": "#e8f0fe"},
-            {"if": {"row_key": "section_pl"}, "fontWeight": "800", "backgroundColor": "#e8f0fe"},
-            {"if": {"row_key": "section_ptrs"}, "fontWeight": "800", "backgroundColor": "#e8f0fe"},
-            {"if": {"row_key": "section_licensing"}, "fontWeight": "800", "backgroundColor": "#e8f0fe"},
-            {"if": {"row_key": "section_valuation"}, "fontWeight": "800", "backgroundColor": "#e8f0fe"},
-        ]
+        style_cond = []
+
+        for row_key in ["revenue", "gross_profit", "ebitda", "free_cash_flow", "rnpv", "licensee_enpv", "licensor_npv"]:
+            style_cond.append({
+                "if": {"filter_query": f"{{row_key}} = '{row_key}'"},
+                "backgroundColor": "#f8fafc",
+                "fontWeight": "800",
+            })
+
+        for row_key in ["section_market", "section_pl", "section_ptrs", "section_licensing", "section_valuation"]:
+            style_cond.append({
+                "if": {"filter_query": f"{{row_key}} = '{row_key}'"},
+                "backgroundColor": "#e8f0fe",
+                "fontWeight": "900",
+                "color": "#172033",
+            })
+
+        style_cond.append({
+            "if": {"column_id": "y0"},
+            "borderLeft": "2px solid #1f6feb",
+        })
 
         override_status = ""
         if overrides:
