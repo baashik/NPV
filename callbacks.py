@@ -402,27 +402,38 @@ def register_callbacks(app):
     # Summary cards
     # ==========================================================================
     @app.callback(
-        Output("summary-lic-mean", "children"),
-        Output("summary-lic-prob", "children"),
-        Output("summary-lr-mean", "children"),
-        Output("summary-lr-prob", "children"),
+        Output("summary-dcf-lic-mean", "children"),
+        Output("summary-dcf-lic-prob", "children"),
+        Output("summary-dcf-lr-mean", "children"),
+        Output("summary-dcf-lr-prob", "children"),
+        Output("summary-mc-lic-mean", "children"),
+        Output("summary-mc-lic-prob", "children"),
+        Output("summary-mc-lr-mean", "children"),
+        Output("summary-mc-lr-prob", "children"),
+        Output("summary-br-lic-mean", "children"),
+        Output("summary-br-lic-prob", "children"),
+        Output("summary-br-lr-mean", "children"),
+        Output("summary-br-lr-prob", "children"),
+        Output("summary-se-lic-mean", "children"),
+        Output("summary-se-lic-prob", "children"),
+        Output("summary-se-lr-mean", "children"),
+        Output("summary-se-lr-prob", "children"),
         Input("store-results", "data"),
     )
     def update_cards(data):
         if not data:
             e = kpi_card("—", "—")
-            return e, e, e, e
+            return [e] * 16
         ls, lr = data["ls_stats"], data["lr_stats"]
-        return (
-            kpi_card("Licensee Mean eNPV", f"${ls['mean']:.1f}M", COLORS["blue"],
-                     f"P5: ${ls['p5']:.1f}M  |  P95: ${ls['p95']:.1f}M"),
-            kpi_card("P(Licensee eNPV > 0)", f"{ls['prob_pos']*100:.1f}%", COLORS["green"],
-                     f"Median: ${ls['p50']:.1f}M"),
-            kpi_card("Licensor Deal NPV", f"${lr['mean']:.1f}M", COLORS["teal"],
-                     f"P5: ${lr['p5']:.1f}M  |  P95: ${lr['p95']:.1f}M"),
-            kpi_card("P(Licensor NPV > 0)", f"{lr['prob_pos']*100:.1f}%", COLORS["amber"],
-                     f"Median: ${lr['p50']:.1f}M"),
-        )
+        card1 = kpi_card("Licensee Mean eNPV", f"${ls['mean']:.1f}M", COLORS["blue"],
+                         f"P5: ${ls['p5']:.1f}M  |  P95: ${ls['p95']:.1f}M")
+        card2 = kpi_card("P(Licensee eNPV > 0)", f"{ls['prob_pos']*100:.1f}%", COLORS["green"],
+                         f"Median: ${ls['p50']:.1f}M")
+        card3 = kpi_card("Licensor Deal NPV", f"${lr['mean']:.1f}M", COLORS["teal"],
+                         f"P5: ${lr['p5']:.1f}M  |  P95: ${lr['p95']:.1f}M")
+        card4 = kpi_card("P(Licensor NPV > 0)", f"{lr['prob_pos']*100:.1f}%", COLORS["amber"],
+                         f"Median: ${lr['p50']:.1f}M")
+        return [card1, card2, card3, card4] * 4
 
     # ==========================================================================
     # Sidebar mini DCF

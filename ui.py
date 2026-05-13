@@ -56,12 +56,18 @@ def sidebar():
 
 
 # ============================================================================
-# Summary cards row
+# Summary cards row — page-specific to avoid duplicate IDs in hidden tabs
 # ============================================================================
-def summary_cards():
-    ids = ["summary-lic-mean", "summary-lic-prob", "summary-lr-mean", "summary-lr-prob"]
+def summary_cards(page):
+    prefix_map = {
+        "dcf":    ("summary-dcf-lic-mean", "summary-dcf-lic-prob", "summary-dcf-lr-mean", "summary-dcf-lr-prob"),
+        "mc":     ("summary-mc-lic-mean",  "summary-mc-lic-prob",  "summary-mc-lr-mean",  "summary-mc-lr-prob"),
+        "bridge": ("summary-br-lic-mean",  "summary-br-lic-prob",  "summary-br-lr-mean",  "summary-br-lr-prob"),
+        "sens":   ("summary-se-lic-mean",  "summary-se-lic-prob",  "summary-se-lr-mean",  "summary-se-lr-prob"),
+    }
+    ids = prefix_map.get(page, prefix_map["dcf"])
     return dbc.Row([
-        dbc.Col(html.Div(id=ids[0], style={**CARD, "padding": "12px 14px", "height": "70px"}), lg=3, md=6)
+        dbc.Col(html.Div(id=ids[i], style={**CARD, "padding": "12px 14px", "height": "70px"}), lg=3, md=6)
         for i in range(4)
     ], className="g-2 mb-3")
 
@@ -155,7 +161,7 @@ def assumptions_panel():
 # ============================================================================
 def dcf_page():
     return html.Div([
-        summary_cards(),
+        summary_cards("dcf"),
         assumptions_panel(),
         html.Div([
             html.H5("Revenue & Cash Flow", style={"fontWeight": "800", "marginBottom": "8px"}),
@@ -167,15 +173,15 @@ def dcf_page():
 
 def mc_page():
     return html.Div([
-        summary_cards(),
+        summary_cards("mc"),
         html.Div(dbc.Card(dbc.CardBody(dcc.Graph(id="mc-chart", config={"displayModeBar": False})),
-                           style={**CARD, "padding": "8px"})),
+                          style={**CARD, "padding": "8px"})),
     ])
 
 
 def bridge_page():
     return html.Div([
-        summary_cards(),
+        summary_cards("bridge"),
         dbc.Row([
             dbc.Col(html.Div([html.Div("Licensor NPV", style={"fontSize": "0.72rem", "fontWeight": "700", "color": COLORS["muted"]}),
                              html.H4(id="licensor-npv", style={"fontWeight": "800", "color": COLORS["teal"]})],
@@ -201,7 +207,7 @@ def bridge_page():
 
 def sens_page():
     return html.Div([
-        summary_cards(),
+        summary_cards("sens"),
         html.Div([
             dbc.Card(dbc.CardBody(dcc.Graph(id="tornado-chart", config={"displayModeBar": False})),
                      style={**CARD, "padding": "8px", "marginBottom": "14px"}),
