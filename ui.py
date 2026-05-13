@@ -110,10 +110,12 @@ def assumptions_panel():
                 field("Tax Rate (%)", dbc.Input(id="in-tax", value=21.0, type="number", step=1, size="sm")),
             ], lg=3, md=6),
             dbc.Col([
-                section_label("Discount & PTRS"),
+                section_label("Discount Rates"),
+                field("Asset Discount Rate (%)", dbc.Input(id="in-asset-dr", value=12.0, type="number", step=0.5, size="sm")),
                 field("Licensee WACC (%)", dbc.Input(id="in-lsw", value=10.0, type="number", step=0.5, size="sm")),
-                field("Licensor WACC (%)", dbc.Input(id="in-lrw", value=14.0, type="number", step=0.5, size="sm")),
+                field("Licensor Discount Rate (%)", dbc.Input(id="in-lrw", value=14.0, type="number", step=0.5, size="sm")),
                 html.Div(style={"height": "8px"}),
+                section_label("PTRS"),
                 field("Ph1 → Ph2 (%)", dbc.Input(id="p1", value=63.0, type="number", step=1, size="sm")),
                 field("Ph2 → Ph3 (%)", dbc.Input(id="p2", value=30.0, type="number", step=1, size="sm")),
                 field("Ph3 → NDA (%)", dbc.Input(id="p3", value=58.0, type="number", step=1, size="sm")),
@@ -192,6 +194,70 @@ def sens_page():
                      style={**CARD, "padding": "8px"}),
         ]),
     ])
+
+
+# ============================================================================
+# DCF Table builder
+# ============================================================================
+def build_dcf_table(base):
+    """
+    Returns (columns, rows, metric_rows) for a TRANSPOSED DCF table:
+      - First column  = metric label (Line Item)
+      - Remaining 17 columns = one per year (2026 to 2042)
+    """
+    rd_arr = np.array([RD_SCHEDULE.get(i, 0.0) for i in range(N_YEARS)])
+    disc_fcf = base["risk_adj_fcf"] * base.get("df_asset", base.get("df_ls", np.ones(N_YEARS)))
+
+    pop_row, pop = [], 450.0
+    for _ in range(N_YEARS):
+        pop *= 1.002
+        pop_row.append(pop)
+
+    LABEL_COL = "Line Item"
+    year_cols = [str(y) for y in YEARS]
+
+    metric_rows = [
+        ("── REVENUE MODEL", None, "header"),
+        ("EU Population (M)", pop_row, "pop"),
+        ("Gross Revenue ($M)", base["rev"], "rev"),
+        ("Less: COGS ($M)", -base["cogs"], "cost"),
+        ("── COSTS & R&D", None, "header"),
+        ("R&D Expense ($M)", -rd_arr, "cost"),
+        ("EBITDA ($M)", base["ebitda"], "ebitda"),
+        ("── DEAL ECONOMICS", None, "header"),
+        ("Royalty Paid ($M)", -base.get("royalty", np.zeros(N_YEARS)), "cost"),
+        ("Free Cash Flow ($M)", base["fcf"], "fcf"),
+        ("── RISK ADJUSTMENT", None, "header"),
+        ("Cum. P(Success) %", base["ptr"] * 100, "pct"),
+        ("Risk-Adj FCF ($M)", base["risk_adj_fcf"], "rfcf"),
+        ("── DISCOUNTING", None, "header"),
+        ("Discount Factor", base.get("df_ls", np.ones(N_YEARS)), "df"),
+        ("Disc. eNPV ($M)", disc_fcf, "enpv"),
+    ]
+
+    columns = [{"name": LABEL_COL, "id": LABEL_COL}] + \
+              [{"name": y, "id": y} for y in year_cols]
+
+    rows = []
+    for label, vals, fmt in metric_rows:
+        row = {LABEL_COL: label}
+        if vals is None:
+            for y in year_cols:
+                row[y] = ""
+        else:
+            for i, y in enumerate(year_cols):
+                v = float(vals[i])
+                if fmt == "pop":
+                    row[y] = f"{v:,.1f}"
+                elif fmt == "pct":
+                    row[y] = f"{v:.1f}%"
+                elif fmt == "df":
+                    row[y] = f"{v:.4f}"
+                else:
+                    row[y] = f"{v:,.2f}"
+        rows.append(row)
+
+    return columns, rows, metric_rows
 
 
 # ============================================================================

@@ -76,6 +76,9 @@ class ScenarioParams:
     p3:         float = 0.58
     p4:         float = 0.90
     peak_pen:   float = 0.05
+    asset_discount_rate: float = 0.12  # Core DCF / standalone product rNPV
+    licensee_wacc:         float = 0.10  # Licensee Model
+    licensor_discount_rate: float = 0.14  # Licensor Model
     rd:         Dict[int, float] = field(default_factory=lambda: RD_SCHEDULE.copy())
     milestones: Dict[int, float] = field(default_factory=lambda: {2: 1.0, 4: 1.0, 6: 1.0})
     tiers:      List[Tuple[float, float, float]] = field(default_factory=lambda: ROYALTY_TIERS_DEFAULT.copy())
@@ -83,7 +86,8 @@ class ScenarioParams:
 
 def build_params(
     pop: float, price: float, pen: float, cogs: float, tax: float,
-    lsw: float, lrw: float, p1: float, p2: float, p3: float, p4: float,
+    asset_dr: float, licensee_wacc: float, licensor_dr: float,
+    p1: float, p2: float, p3: float, p4: float,
     upfront: float, mil: float,
 ) -> ScenarioParams:
     return ScenarioParams(
@@ -96,5 +100,8 @@ def build_params(
         p3=float(p3 or 58) / 100,
         p4=float(p4 or 90) / 100,
         peak_pen=float(pen or 5) / 100,
+        asset_discount_rate=float(asset_dr or 12) / 100,
+        licensee_wacc=float(licensee_wacc or 10) / 100,
+        licensor_discount_rate=float(licensor_dr or 14) / 100,
         milestones={2: float(mil or 1), 4: float(mil or 1), 6: float(mil or 1)},
     )

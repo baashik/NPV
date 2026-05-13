@@ -61,21 +61,22 @@ def register_callbacks(app):
     @app.callback(
         [Output("in-pop", "value"), Output("in-price", "value"),
          Output("in-pen", "value"), Output("in-cogs", "value"),
-         Output("in-tax", "value"), Output("in-lsw", "value"),
-         Output("in-lrw", "value"), Output("p1", "value"),
-         Output("p2", "value"), Output("p3", "value"),
-         Output("p4", "value"), Output("in-upfront", "value"),
-         Output("in-mil", "value"), Output("scenario-name", "value")],
+         Output("in-tax", "value"), Output("in-asset-dr", "value"),
+         Output("in-lsw", "value"), Output("in-lrw", "value"),
+         Output("p1", "value"), Output("p2", "value"),
+         Output("p3", "value"), Output("p4", "value"),
+         Output("in-upfront", "value"), Output("in-mil", "value"),
+         Output("scenario-name", "value")],
         Input("load-scenario-dropdown", "value"),
         State("store-scenarios", "data"),
     )
     def load_scenario(name, data):
         if not name or not data or name not in data:
-            return (no_update,) * 14
+            return (no_update,) * 13
         s = data[name]
         return (s["eu_pop"], s["price"], s["pen"], s["cogs"],
-                s["tax"], s["lsw"], s["lrw"], s["p1"], s["p2"],
-                s["p3"], s["p4"], s["upfront"], s["mil"], name)
+                s["tax"], s.get("asset_dr", 12), s["lsw"], s["lrw"],
+                s["p1"], s["p2"], s["p3"], s["p4"], s["upfront"], s["mil"], name)
 
     # ==========================================================================
     # Run simulation
@@ -86,19 +87,24 @@ def register_callbacks(app):
         Input("btn-run", "n_clicks"),
         State("in-pop", "value"), State("in-price", "value"),
         State("in-pen", "value"), State("in-cogs", "value"),
-        State("in-tax", "value"), State("in-lsw", "value"),
-        State("in-lrw", "value"), State("p1", "value"),
-        State("p2", "value"), State("p3", "value"),
-        State("p4", "value"), State("in-upfront", "value"),
-        State("in-mil", "value"), State("sl-sims", "value"),
+        State("in-tax", "value"), State("in-asset-dr", "value"),
+        State("in-lsw", "value"), State("in-lrw", "value"),
+        State("p1", "value"), State("p2", "value"),
+        State("p3", "value"), State("p4", "value"),
+        State("in-upfront", "value"), State("in-mil", "value"),
+        State("sl-sims", "value"),
         prevent_initial_call=True,
     )
-    def run_sim(n_clicks, pop, price, pen, cogs, tax, lsw, lrw,
+    def run_sim(n_clicks, pop, price, pen, cogs, tax, asset_dr, lsw, lrw,
                 p1, p2, p3, p4, upfront, mil, n_sims):
-        params = build_params(pop, price, pen, cogs, tax, lsw, lrw,
+        params = build_params(pop, price, pen, cogs, tax,
+                              asset_dr, lsw, lrw,
                               p1, p2, p3, p4, upfront, mil)
-        base = run_scenario(0.002, params.peak_pen, float(price or 15000),
-                            float(lsw or 10) / 100, float(lrw or 14) / 100, params)
+        base = run_scenario(
+            0.002, params.peak_pen, float(price or 15000),
+            params.asset_discount_rate, params.licensee_wacc, params.licensor_discount_rate,
+            params
+        )
         ls, lr = run_montecarlo(int(n_sims or 5000), params, float(price or 15000))
         ls_s = npv_stats(ls)
         lr_s = npv_stats(lr)
@@ -114,13 +120,16 @@ def register_callbacks(app):
             "base_cogs": base["cogs"].tolist(),
             "base_royalty": base["royalty"].tolist(),
             "base_ptr": base["ptr"].tolist(),
+            "base_df_asset": base["df_asset"].tolist(),
             "base_df_ls": base["df_ls"].tolist(),
             "base_lf_cf": base["licensor_cf"].tolist(),
+            "base_rnpv": base["asset_rnpv"],
             "base_enpv": base["licensee_enpv"],
             "base_lr_npv": base["licensor_npv"],
             "sens_rows": sens,
         }, (
             f"✅ {int(n_sims):,} iters  |  "
+            f"rNPV: ${base['asset_rnpv']:.1f}M  |  "
             f"eNPV: ${base['licensee_enpv']:.1f}M  |  "
             f"P>0: {ls_s['prob_pos']*100:.1f}%"
         )
@@ -135,15 +144,16 @@ def register_callbacks(app):
         State("scenario-name", "value"),
         State("in-pop", "value"), State("in-price", "value"),
         State("in-pen", "value"), State("in-cogs", "value"),
-        State("in-tax", "value"), State("in-lsw", "value"),
-        State("in-lrw", "value"), State("p1", "value"),
-        State("p2", "value"), State("p3", "value"),
-        State("p4", "value"), State("in-upfront", "value"),
-        State("in-mil", "value"), State("store-scenarios", "data"),
+        State("in-tax", "value"), State("in-asset-dr", "value"),
+        State("in-lsw", "value"), State("in-lrw", "value"),
+        State("p1", "value"), State("p2", "value"),
+        State("p3", "value"), State("p4", "value"),
+        State("in-upfront", "value"), State("in-mil", "value"),
+        State("store-scenarios", "data"),
         prevent_initial_call=True,
     )
     def save_scenario(n_clicks, name, pop, price, pen, cogs, tax,
-                      lsw, lrw, p1, p2, p3, p4, upfront, mil, data):
+                      asset_dr, lsw, lrw, p1, p2, p3, p4, upfront, mil, data):
         if not name or not name.strip():
             return data or {}, "❌ Enter a name"
         n = name.strip()
@@ -151,11 +161,11 @@ def register_callbacks(app):
         s[n] = {
             "eu_pop": float(pop or 450), "price": float(price or 15000),
             "pen": float(pen or 5), "cogs": float(cogs or 12),
-            "tax": float(tax or 21), "lsw": float(lsw or 10),
-            "lrw": float(lrw or 14), "p1": float(p1 or 63),
-            "p2": float(p2 or 30), "p3": float(p3 or 58),
-            "p4": float(p4 or 90), "upfront": float(upfront or 2),
-            "mil": float(mil or 1),
+            "tax": float(tax or 21), "asset_dr": float(asset_dr or 12),
+            "lsw": float(lsw or 10), "lrw": float(lrw or 14),
+            "p1": float(p1 or 63), "p2": float(p2 or 30),
+            "p3": float(p3 or 58), "p4": float(p4 or 90),
+            "upfront": float(upfront or 2), "mil": float(mil or 1),
             "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
         return s, f"✅ Saved: {n}"
@@ -179,14 +189,15 @@ def register_callbacks(app):
         State("scenario-name", "value"),
         State("in-pop", "value"), State("in-price", "value"),
         State("in-pen", "value"), State("in-cogs", "value"),
-        State("in-tax", "value"), State("in-lsw", "value"),
-        State("in-lrw", "value"), State("p1", "value"),
-        State("p2", "value"), State("p3", "value"),
-        State("p4", "value"), State("in-upfront", "value"),
-        State("in-mil", "value"), State("store-results", "data"),
+        State("in-tax", "value"), State("in-asset-dr", "value"),
+        State("in-lsw", "value"), State("in-lrw", "value"),
+        State("p1", "value"), State("p2", "value"),
+        State("p3", "value"), State("p4", "value"),
+        State("in-upfront", "value"), State("in-mil", "value"),
+        State("store-results", "data"),
         prevent_initial_call=True,
     )
-    def export(n_clicks, name, pop, price, pen, cogs, tax, lsw, lrw,
+    def export(n_clicks, name, pop, price, pen, cogs, tax, asset_dr, lsw, lrw,
                p1, p2, p3, p4, upfront, mil, results):
         n = name or "Export"
         d = {
@@ -194,8 +205,11 @@ def register_callbacks(app):
             "assumptions": {
                 "eu_pop": float(pop or 450), "price": float(price or 15000),
                 "penetration": float(pen or 5), "cogs_pct": float(cogs or 12),
-                "tax_rate": float(tax or 21), "licensee_wacc": float(lsw or 10),
-                "licensor_wacc": float(lrw or 14), "ph1_to_ph2": float(p1 or 63),
+                "tax_rate": float(tax or 21),
+                "asset_discount_rate": float(asset_dr or 12),
+                "licensee_wacc": float(lsw or 10),
+                "licensor_discount_rate": float(lrw or 14),
+                "ph1_to_ph2": float(p1 or 63),
                 "ph2_to_ph3": float(p2 or 30), "ph3_to_nda": float(p3 or 58),
                 "nda_approval": float(p4 or 90), "upfront": float(upfront or 2),
                 "milestones": float(mil or 1),

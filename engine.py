@@ -52,7 +52,8 @@ def compute_ptr(params: ScenarioParams) -> np.ndarray:
 # Single scenario (returns dict for DCF table rendering)
 # ============================================================================
 def run_scenario(
-    pg: float, pp: float, pr: float, lsw: float, lrw: float,
+    pg: float, pp: float, pr: float,
+    asset_dr: float, licensee_wacc: float, licensor_dr: float,
     params: ScenarioParams,
 ) -> Dict:
     """
@@ -102,8 +103,9 @@ def run_scenario(
             licensor_cf[yr_idx] += mil_m * ptr[yr_idx]
 
     # ---- Discount -----------------------------------------------------------
-    df_ls = (1 + lsw) ** -YEAR_INDEX
-    df_lr = (1 + lrw) ** -YEAR_INDEX
+    df_asset = (1 + asset_dr) ** -YEAR_INDEX
+    df_ls = (1 + licensee_wacc) ** -YEAR_INDEX
+    df_lr = (1 + licensor_dr) ** -YEAR_INDEX
 
     return {
         "rev":            rev,
@@ -114,7 +116,9 @@ def run_scenario(
         "risk_adj_fcf":   risk_adj_fcf,
         "licensor_cf":    licensor_cf,
         "ptr":            ptr,
+        "df_asset":       df_asset,
         "df_ls":          df_ls,
+        "asset_rnpv":     float(np.sum(risk_adj_fcf * df_asset)),
         "licensee_enpv":  float(np.sum(risk_adj_fcf * df_ls)),
         "licensor_npv":   float(np.sum(licensor_cf * df_lr)),
     }
@@ -143,8 +147,9 @@ def run_montecarlo(
     pgs  = np.clip(rng.normal(0.002,  0.010, size=n_sims), -0.05, 0.05)
     pps  = np.clip(rng.normal(0.05,   0.015, size=n_sims),  0.005, 0.20)
     prs  = np.maximum(rng.normal(price, price * 0.15, size=n_sims), 5.0)
-    lsws = np.clip(rng.normal(0.10,   0.025, size=n_sims),  0.04, 0.25)
-    lrws = np.clip(rng.normal(0.14,   0.025, size=n_sims),  0.04, 0.30)
+    asset_dr = np.clip(rng.normal(params.asset_discount_rate, 0.025, size=n_sims), 0.04, 0.25)
+    lsws = np.clip(rng.normal(params.licensee_wacc, 0.025, size=n_sims), 0.04, 0.25)
+    lrws = np.clip(rng.normal(params.licensor_discount_rate, 0.025, size=n_sims), 0.04, 0.30)
 
     ptr = compute_ptr(params)                 # (N_YEARS,)  — same for all sims
 
@@ -222,28 +227,30 @@ def run_sensitivity(params: ScenarioParams, price: float, base_enpv: float) -> L
         "Peak Penetration":  ("peak_pen",    params.peak_pen * 0.4, params.peak_pen * 1.8, False, None),
         "Price / Patient":   ("price_sens",  price * 0.6,          price * 1.5,            True,  None),
         "Ph2→Ph3 PTRS":      ("p2",         params.p2 * 0.6,      params.p2 * 1.5,        False, "p2"),
-        "Licensee WACC":     ("lsw_sens",    0.07,                 0.14,                   True,  None),
+        "Asset Discount Rate": ("asset_dr", params.asset_discount_rate * 0.7, params.asset_discount_rate * 1.4, True, "asset_discount_rate"),
+        "Licensee WACC":     ("lsw_sens",    params.licensee_wacc * 0.7, params.licensee_wacc * 1.4, True, "licensee_wacc"),
         "COGS %":            ("cogs",       params.cogs * 0.6,     params.cogs * 1.5,      False, "cogs"),
         "Tax Rate":          ("tax",        params.tax * 0.6,      params.tax * 1.5,       False, "tax"),
     }
 
     rows = []
-    for label, (_, lo_v, hi_v, is_price_or_wacc, attr) in sens_vars.items():
-        def _enpv(v, attr=attr, is_price_or_wacc=is_price_or_wacc):
+    for label, (_, lo_v, hi_v, is_price_or_dr, attr) in sens_vars.items():
+        def _enpv(v, attr=attr, is_price_or_dr=is_price_or_dr):
             p = ScenarioParams(**{f.name: getattr(params, f.name) for f in params.__dataclass_fields__.values()})
             pr_v = float(price)
-            lsw_v = 0.10
-            if is_price_or_wacc:
+            if is_price_or_dr:
                 if label == "Price / Patient":
                     pr_v = v
-                else:
-                    lsw_v = v
+                elif label == "Asset Discount Rate":
+                    p.asset_discount_rate = v
+                elif label == "Licensee WACC":
+                    p.licensee_wacc = v
             elif attr is not None:
                 setattr(p, attr, v)
             return run_scenario(
                 0.002, p.peak_pen if label != "Peak Penetration" else v,
-                pr_v, lsw_v if label == "Licensee WACC" else 0.10,
-                0.14, p,
+                pr_v, p.asset_discount_rate, p.licensee_wacc, p.licensor_discount_rate,
+                p,
             )["licensee_enpv"]
 
         rows.append({
