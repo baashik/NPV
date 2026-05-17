@@ -8,7 +8,6 @@ import pandas as pd
 from model_engine import (
     EDITABLE_ROWS,
     build_dcf_model,
-    clean_assumptions,
     parse_user_value,
     row_format_map,
     table_columns,
@@ -100,26 +99,57 @@ def register_callbacks(app):
         Output("manual-overrides", "data"),
         Input("dcf-table", "data_timestamp"),
         State("dcf-table", "data"),
+        State("last-table-data", "data"),
         State("manual-overrides", "data"),
         prevent_initial_call=True,
     )
-    def apply_overrides(ts, data, overrides):
+    def apply_overrides(ts, data, last_table_data, overrides):
+        """Store only genuine user edits as manual overrides.
+
+        Dash DataTable updates its data when the model refreshes. The previous
+        implementation parsed every editable cell after every refresh, which
+        accidentally converted normal calculated model output into manual
+        overrides. That made assumption changes appear not to flow through to
+        the DCF table.
+        """
         if not data or ts is None:
             return overrides or {}
+
+        # If the table data is exactly the last model-generated table, this was
+        # a model refresh, not a user edit. Do not create overrides.
+        if data == (last_table_data or []):
+            return overrides or {}
+
         new_overrides = dict(overrides or {})
+        previous_by_key = {
+            row.get("row_key"): row
+            for row in (last_table_data or [])
+            if isinstance(row, dict)
+        }
+
         for row in data:
             row_key = row.get("row_key", "")
             if row_key not in EDITABLE_ROWS:
                 continue
+            previous_row = previous_by_key.get(row_key, {})
             for col, raw in row.items():
                 if col in ("row_key", "label", "edit", ""):
                     continue
+
+                # Only save a manual override when this specific cell differs
+                # from the last model-generated version of the table.
+                if previous_row.get(col) == raw:
+                    continue
+
                 try:
                     yr_idx = int(col.replace("y", ""))
                     fmt = row_format_map().get(row_key, "number")
                     parsed = parse_user_value(raw, fmt)
-                    if parsed is not None:
-                        new_overrides[f"{row_key}|{yr_idx}"] = parsed
+                    key = f"{row_key}|{yr_idx}"
+                    if parsed is None:
+                        new_overrides.pop(key, None)
+                    else:
+                        new_overrides[key] = parsed
                 except (ValueError, AttributeError):
                     pass
         return new_overrides
@@ -243,8 +273,6 @@ def register_callbacks(app):
         lic_npv = s.get("licensor_npv", 0)
         lic_milestones = s.get("licensor_total_milestones", 0)
         lic_royalties = s.get("licensor_total_royalties", 0)
-        # Total Deal Value is an undiscounted commercial metric, not the discounted Licensor NPV.
-        # Milestones already include the upfront payment, so do not add upfront again here.
         lic_deal = lic_milestones + lic_royalties
         lic_risk_cf = rows.get("risk_adj_licensor_cash_flow", pd.Series([0] * len(years))).values
         disc_lic_cf = rows.get("discounted_licensor_cf", pd.Series([0] * len(years))).values
