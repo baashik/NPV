@@ -243,7 +243,9 @@ def register_callbacks(app):
         lic_npv = s.get("licensor_npv", 0)
         lic_milestones = s.get("licensor_total_milestones", 0)
         lic_royalties = s.get("licensor_total_royalties", 0)
-        lic_deal = lic_npv
+        # Total Deal Value is an undiscounted commercial metric, not the discounted Licensor NPV.
+        # Milestones already include the upfront payment, so do not add upfront again here.
+        lic_deal = lic_milestones + lic_royalties
         lic_risk_cf = rows.get("risk_adj_licensor_cash_flow", pd.Series([0] * len(years))).values
         disc_lic_cf = rows.get("discounted_licensor_cf", pd.Series([0] * len(years))).values
 
@@ -251,12 +253,12 @@ def register_callbacks(app):
             x=["Upfront", "Dev Milestone", "Reg Milestone", "Comm Milestone", "Royalties", "Total"],
             measure=["relative", "relative", "relative", "relative", "relative", "total"],
             y=[rows.get("upfront_income", pd.Series([0])).sum(), rows.get("development_milestone_income", pd.Series([0])).sum(), rows.get("regulatory_milestone_income", pd.Series([0])).sum(), rows.get("commercial_milestone_income", pd.Series([0])).sum(), rows.get("royalty_income", pd.Series([0])).sum(), 0],
-            text=[_money(rows.get("upfront_income", pd.Series([0])).sum()), _money(rows.get("development_milestone_income", pd.Series([0])).sum()), _money(rows.get("regulatory_milestone_income", pd.Series([0])).sum()), _money(rows.get("commercial_milestone_income", pd.Series([0])).sum()), _money(rows.get("royalty_income", pd.Series([0])).sum()), _money(lic_npv)],
+            text=[_money(rows.get("upfront_income", pd.Series([0])).sum()), _money(rows.get("development_milestone_income", pd.Series([0])).sum()), _money(rows.get("regulatory_milestone_income", pd.Series([0])).sum()), _money(rows.get("commercial_milestone_income", pd.Series([0])).sum()), _money(rows.get("royalty_income", pd.Series([0])).sum()), _money(lic_deal)],
             textposition="inside",
             increasing={"marker": {"color": COLORS["blue"]}},
             totals={"marker": {"color": COLORS["teal"]}},
         ))
-        fig3.update_layout(template="plotly_white", height=300, title=f"Licensor Bridge — {_money(lic_npv)}", margin=dict(t=30, b=20))
+        fig3.update_layout(template="plotly_white", height=300, title=f"Licensor Bridge — Total Deal Value {_money(lic_deal)}", margin=dict(t=30, b=20))
 
         fig4 = go.Figure()
         colors_lic = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lic_risk_cf]
