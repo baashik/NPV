@@ -100,7 +100,7 @@ def assumptions_card():
         dbc.CardBody([
             html.H5("1. Assumptions", className="fw-bold"),
             html.Div(
-                "Enter the key commercial, deal, and discount-rate assumptions. Percentages are entered normally: 12 means 12%, 0.20 means 0.20%.",
+                "Enter or change the assumptions, then click Run / Calculate Model at the bottom. The DCF table and Monte Carlo outputs update only when you click the button.",
                 className="text-muted mb-3",
             ),
             html.H6("Market and costs", className="fw-bold"),
@@ -142,6 +142,32 @@ def assumptions_card():
                 input_col("Licensor discount rate %", "licensor-rate", a["licensor_discount_rate"], 0.5),
                 input_col("Monte Carlo runs", "n-sims", 1000, 100, 10),
             ]),
+            html.Hr(),
+            dbc.Row([
+                dbc.Col(
+                    dbc.Button(
+                        "Run / Calculate Model",
+                        id="run-model",
+                        color="primary",
+                        size="lg",
+                        n_clicks=0,
+                        className="w-100 fw-bold",
+                    ),
+                    lg=4,
+                    md=5,
+                    sm=12,
+                ),
+                dbc.Col(
+                    html.Div(
+                        id="run-status",
+                        className="text-muted small pt-2",
+                        children="Showing default model. Change inputs and click Run / Calculate Model.",
+                    ),
+                    lg=8,
+                    md=7,
+                    sm=12,
+                ),
+            ], className="align-items-center"),
         ]),
         className=CARD,
     )
@@ -151,7 +177,7 @@ def dcf_table_card():
     return dbc.Card(
         dbc.CardBody([
             html.H5("2. Excel-style DCF table", className="fw-bold"),
-            html.Div("This table is generated from the assumptions above. It is the central model that feeds Asset, Licensee, and Licensor outputs.", className="text-muted mb-3"),
+            html.Div("This table updates after you click Run / Calculate Model.", className="text-muted mb-3"),
             dash_table.DataTable(
                 id="dcf-table",
                 columns=[],
@@ -176,8 +202,8 @@ def output_page(title, deterministic_id, prob_id, chart_id, table_id, subtitle):
         html.H3(title, className="fw-bold mb-1"),
         html.Div(subtitle, className="text-muted mb-4"),
         dbc.Row([
-            metric_card("Deterministic value", deterministic_id, "Current assumption case"),
-            metric_card("Probability > 0", prob_id, "From Monte Carlo simulation"),
+            metric_card("Deterministic value", deterministic_id, "Current calculated case"),
+            metric_card("Probability > 0", prob_id, "From last Monte Carlo run"),
         ]),
         dbc.Card(dbc.CardBody([
             html.H5("Monte Carlo output", className="fw-bold"),
@@ -317,30 +343,32 @@ def mc_table_and_chart(mc, col, title):
     return data, fig
 
 
-inputs = [
-    Input("initial-population", "value"), Input("population-growth", "value"),
-    Input("target-patient-pct", "value"), Input("diagnosis-rate", "value"),
-    Input("treatment-rate", "value"), Input("peak-penetration", "value"),
-    Input("price-per-unit", "value"), Input("launch-year", "value"),
-    Input("rd-total", "value"), Input("cogs-pct", "value"),
-    Input("ga-opex-pct", "value"), Input("tax-rate", "value"),
-    Input("phase-i-success", "value"), Input("phase-ii-success", "value"),
-    Input("phase-iii-success", "value"), Input("approval-success", "value"),
-    Input("upfront", "value"), Input("dev-ms", "value"), Input("reg-ms", "value"),
-    Input("comm-ms", "value"), Input("royalty-1", "value"), Input("royalty-2", "value"),
-    Input("royalty-3", "value"), Input("asset-rate", "value"),
-    Input("licensee-wacc", "value"), Input("licensor-rate", "value"), Input("n-sims", "value"),
+states = [
+    State("initial-population", "value"), State("population-growth", "value"),
+    State("target-patient-pct", "value"), State("diagnosis-rate", "value"),
+    State("treatment-rate", "value"), State("peak-penetration", "value"),
+    State("price-per-unit", "value"), State("launch-year", "value"),
+    State("rd-total", "value"), State("cogs-pct", "value"),
+    State("ga-opex-pct", "value"), State("tax-rate", "value"),
+    State("phase-i-success", "value"), State("phase-ii-success", "value"),
+    State("phase-iii-success", "value"), State("approval-success", "value"),
+    State("upfront", "value"), State("dev-ms", "value"), State("reg-ms", "value"),
+    State("comm-ms", "value"), State("royalty-1", "value"), State("royalty-2", "value"),
+    State("royalty-3", "value"), State("asset-rate", "value"),
+    State("licensee-wacc", "value"), State("licensor-rate", "value"), State("n-sims", "value"),
 ]
 
 
 @app.callback(
+    Output("run-status", "children"),
     Output("dcf-table", "columns"), Output("dcf-table", "data"), Output("dcf-table", "style_data_conditional"),
     Output("asset-deterministic", "children"), Output("asset-prob", "children"), Output("asset-table", "data"), Output("asset-chart", "figure"),
     Output("licensee-deterministic", "children"), Output("licensee-prob", "children"), Output("licensee-table", "data"), Output("licensee-chart", "figure"),
     Output("licensor-deterministic", "children"), Output("licensor-prob", "children"), Output("licensor-table", "data"), Output("licensor-chart", "figure"),
-    *inputs,
+    Input("run-model", "n_clicks"),
+    *states,
 )
-def update_outputs(*values):
+def update_outputs(n_clicks, *values):
     assumptions, n_sims = collect_assumptions(values)
     model = build_dcf_model(assumptions, {})
     summary = model["summary"]
@@ -356,7 +384,13 @@ def update_outputs(*values):
     licensee_table, licensee_fig = mc_table_and_chart(mc, "licensee_npv", "Licensee eNPV")
     licensor_table, licensor_fig = mc_table_and_chart(mc, "licensor_npv", "Licensor NPV")
 
+    if n_clicks:
+        status = f"Calculated with {n_sims:,} Monte Carlo runs. You can now review Asset, Licensee, and Licensor pages."
+    else:
+        status = f"Showing default model with {n_sims:,} Monte Carlo runs. Change inputs and click Run / Calculate Model."
+
     return (
+        status,
         table_columns(model["years"]), table_data(model), dcf_styles,
         money(summary["rnpv"]), pct(mc["rnpv"].gt(0).mean()), asset_table, asset_fig,
         money(summary["licensee_npv"]), pct(mc["licensee_npv"].gt(0).mean()), licensee_table, licensee_fig,
