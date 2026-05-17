@@ -4,7 +4,7 @@ import dash_bootstrap_components as dbc
 import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, dash_table, dcc, html
 
-from model_engine import DEFAULT_ASSUMPTIONS, build_dcf_model, table_columns, table_data
+from model_engine import DEFAULT_ASSUMPTIONS, build_dcf_model, format_value
 from monte_carlo import run_biotech_monte_carlo, validate_simulation_assumptions
 
 
@@ -36,6 +36,15 @@ CONTENT_STYLE = {
 }
 CARD = "shadow-sm border-0 mb-4"
 
+INPUT_IDS = [
+    "initial-population", "population-growth", "target-patient-pct", "diagnosis-rate",
+    "treatment-rate", "peak-penetration", "price-per-unit", "launch-year",
+    "rd-total", "cogs-pct", "ga-opex-pct", "tax-rate",
+    "phase-i-success", "phase-ii-success", "phase-iii-success", "approval-success",
+    "upfront", "dev-ms", "reg-ms", "comm-ms", "royalty-1", "royalty-2", "royalty-3",
+    "asset-rate", "licensee-wacc", "licensor-rate", "n-sims",
+]
+
 
 def money(value):
     return f"${float(value):,.1f}M"
@@ -45,7 +54,7 @@ def pct(value):
     return f"{float(value) * 100:.1f}%"
 
 
-def input_col(label, component_id, value, step=1, min_value=None, width=3):
+def input_col(label, component_id, value, step=1, min_value=None):
     return dbc.Col(
         [
             dbc.Label(label, className="small fw-bold text-muted"),
@@ -59,7 +68,7 @@ def input_col(label, component_id, value, step=1, min_value=None, width=3):
                 size="sm",
             ),
         ],
-        lg=width,
+        lg=3,
         md=4,
         sm=6,
         className="mb-2",
@@ -100,7 +109,7 @@ def assumptions_card():
         dbc.CardBody([
             html.H5("1. Assumptions", className="fw-bold"),
             html.Div(
-                "Enter or change the assumptions, then click Run / Calculate Model at the bottom. The DCF table and Monte Carlo outputs update only when you click the button.",
+                "Enter or change the assumptions, then click Run / Calculate Model. The DCF table and Monte Carlo outputs update only when you click the button.",
                 className="text-muted mb-3",
             ),
             html.H6("Market and costs", className="fw-bold"),
@@ -145,27 +154,12 @@ def assumptions_card():
             html.Hr(),
             dbc.Row([
                 dbc.Col(
-                    dbc.Button(
-                        "Run / Calculate Model",
-                        id="run-model",
-                        color="primary",
-                        size="lg",
-                        n_clicks=0,
-                        className="w-100 fw-bold",
-                    ),
-                    lg=4,
-                    md=5,
-                    sm=12,
+                    dbc.Button("Run / Calculate Model", id="run-model", color="primary", size="lg", n_clicks=0, className="w-100 fw-bold"),
+                    lg=4, md=5, sm=12,
                 ),
                 dbc.Col(
-                    html.Div(
-                        id="run-status",
-                        className="text-muted small pt-2",
-                        children="Showing default model. Change inputs and click Run / Calculate Model.",
-                    ),
-                    lg=8,
-                    md=7,
-                    sm=12,
+                    html.Div(id="run-status", className="text-muted small pt-2", children="Showing default model. Change inputs and click Run / Calculate Model."),
+                    lg=8, md=7, sm=12,
                 ),
             ], className="align-items-center"),
         ]),
@@ -184,12 +178,42 @@ def dcf_table_card():
                 data=[],
                 merge_duplicate_headers=True,
                 page_action="none",
-                fixed_rows={"headers": True},
-                fixed_columns={"headers": True, "data": 1},
-                style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "620px"},
-                style_cell={"fontFamily": "Menlo, monospace", "fontSize": "12px", "padding": "7px", "textAlign": "right", "minWidth": "95px", "width": "95px", "maxWidth": "130px", "whiteSpace": "nowrap"},
-                style_header={"fontWeight": "bold", "backgroundColor": "#e2e8f0", "textAlign": "center"},
-                style_cell_conditional=[{"if": {"column_id": "label"}, "textAlign": "left", "fontWeight": "bold", "minWidth": "260px", "width": "260px", "backgroundColor": "#f8fafc"}],
+                style_table={
+                    "overflowX": "auto",
+                    "overflowY": "auto",
+                    "maxHeight": "650px",
+                    "width": "100%",
+                    "minWidth": "100%",
+                    "border": "1px solid #cbd5e1",
+                },
+                style_cell={
+                    "fontFamily": "Menlo, Consolas, monospace",
+                    "fontSize": "12px",
+                    "padding": "7px 9px",
+                    "textAlign": "right",
+                    "minWidth": "92px",
+                    "width": "92px",
+                    "maxWidth": "115px",
+                    "whiteSpace": "nowrap",
+                    "border": "1px solid #cbd5e1",
+                },
+                style_header={
+                    "fontWeight": "800",
+                    "backgroundColor": "#e2e8f0",
+                    "textAlign": "center",
+                    "border": "1px solid #cbd5e1",
+                },
+                style_cell_conditional=[
+                    {
+                        "if": {"column_id": "label"},
+                        "textAlign": "left",
+                        "fontWeight": "800",
+                        "minWidth": "270px",
+                        "width": "270px",
+                        "maxWidth": "320px",
+                        "backgroundColor": "#f8fafc",
+                    }
+                ],
                 style_data_conditional=[],
             ),
         ]),
@@ -209,10 +233,7 @@ def output_page(title, deterministic_id, prob_id, chart_id, table_id, subtitle):
             html.H5("Monte Carlo output", className="fw-bold"),
             dash_table.DataTable(
                 id=table_id,
-                columns=[
-                    {"name": "Metric", "id": "metric"},
-                    {"name": "Value", "id": "value"},
-                ],
+                columns=[{"name": "Metric", "id": "metric"}, {"name": "Value", "id": "value"}],
                 data=[],
                 style_cell={"fontFamily": "Arial", "fontSize": "14px", "padding": "8px"},
                 style_header={"fontWeight": "bold", "backgroundColor": "#f8f9fa"},
@@ -220,6 +241,12 @@ def output_page(title, deterministic_id, prob_id, chart_id, table_id, subtitle):
             dcc.Graph(id=chart_id, config={"displayModeBar": False}),
         ]), className=CARD),
     ])
+
+
+def blank_chart(title):
+    fig = go.Figure()
+    fig.update_layout(template="plotly_white", height=390, title=title)
+    return fig
 
 
 app.layout = html.Div([
@@ -267,21 +294,21 @@ def set_page(*_):
 
 
 @app.callback(
-    Output("page-assumptions", "style"),
-    Output("page-asset", "style"),
-    Output("page-licensee", "style"),
-    Output("page-licensor", "style"),
-    Output("nav-assumptions", "active"),
-    Output("nav-asset", "active"),
-    Output("nav-licensee", "active"),
-    Output("nav-licensor", "active"),
+    Output("page-assumptions", "style"), Output("page-asset", "style"),
+    Output("page-licensee", "style"), Output("page-licensor", "style"),
+    Output("nav-assumptions", "active"), Output("nav-asset", "active"),
+    Output("nav-licensee", "active"), Output("nav-licensor", "active"),
     Input("page-store", "data"),
 )
 def show_page(page):
     pages = ["assumptions", "asset", "licensee", "licensor"]
-    styles = [{"display": "block" if page == p else "none"} for p in pages]
-    actives = [page == p for p in pages]
-    return styles + actives
+    return [{"display": "block" if page == p else "none"} for p in pages] + [page == p for p in pages]
+
+
+def clean_float(value, fallback=0.0):
+    if value is None or value == "":
+        return float(fallback)
+    return float(value)
 
 
 def collect_assumptions(values):
@@ -293,38 +320,55 @@ def collect_assumptions(values):
         asset_rate, licensee_wacc, licensor_rate, n_sims,
     ) = values
     a = dict(DEFAULT_ASSUMPTIONS)
-    rd_total = float(rd_total or 0)
+    rd_total = clean_float(rd_total, 0)
     a.update({
-        "initial_population": float(initial_population or a["initial_population"]),
-        "population_growth": float(population_growth or 0),
-        "target_patient_pct": float(target_patient_pct or 0),
-        "diagnosis_rate": float(diagnosis_rate or 0),
-        "treatment_rate": float(treatment_rate or 0),
-        "peak_penetration": float(peak_penetration or 0),
-        "price_per_unit": float(price_per_unit or 0),
-        "launch_year": int(launch_year or a["launch_year"]),
+        "initial_population": clean_float(initial_population, a["initial_population"]),
+        "population_growth": clean_float(population_growth, 0),
+        "target_patient_pct": clean_float(target_patient_pct, 0),
+        "diagnosis_rate": clean_float(diagnosis_rate, 0),
+        "treatment_rate": clean_float(treatment_rate, 0),
+        "peak_penetration": clean_float(peak_penetration, 0),
+        "price_per_unit": clean_float(price_per_unit, 0),
+        "launch_year": int(clean_float(launch_year, a["launch_year"])),
         "phase_i_rd": rd_total * 0.25,
         "phase_ii_rd": rd_total * 0.30,
         "phase_iii_rd": rd_total * 0.45,
-        "cogs_pct": float(cogs_pct or 0),
-        "ga_opex_pct": float(ga_opex_pct or 0),
-        "tax_rate": float(tax_rate or 0),
-        "phase_i_success": float(phase_i_success or 0),
-        "phase_ii_success": float(phase_ii_success or 0),
-        "phase_iii_success": float(phase_iii_success or 0),
-        "approval_success": float(approval_success or 0),
-        "upfront_payment": float(upfront or 0),
-        "development_milestone": float(dev_ms or 0),
-        "regulatory_milestone": float(reg_ms or 0),
-        "commercial_milestone": float(comm_ms or 0),
-        "royalty_tier_1_rate": float(royalty_1 or 0),
-        "royalty_tier_2_rate": float(royalty_2 or 0),
-        "royalty_tier_3_rate": float(royalty_3 or 0),
-        "asset_discount_rate": float(asset_rate or a["asset_discount_rate"]),
-        "licensee_wacc": float(licensee_wacc or a["licensee_wacc"]),
-        "licensor_discount_rate": float(licensor_rate or a["licensor_discount_rate"]),
+        "cogs_pct": clean_float(cogs_pct, 0),
+        "ga_opex_pct": clean_float(ga_opex_pct, 0),
+        "tax_rate": clean_float(tax_rate, 0),
+        "phase_i_success": clean_float(phase_i_success, 0),
+        "phase_ii_success": clean_float(phase_ii_success, 0),
+        "phase_iii_success": clean_float(phase_iii_success, 0),
+        "approval_success": clean_float(approval_success, 0),
+        "upfront_payment": clean_float(upfront, 0),
+        "development_milestone": clean_float(dev_ms, 0),
+        "regulatory_milestone": clean_float(reg_ms, 0),
+        "commercial_milestone": clean_float(comm_ms, 0),
+        "royalty_tier_1_rate": clean_float(royalty_1, 0),
+        "royalty_tier_2_rate": clean_float(royalty_2, 0),
+        "royalty_tier_3_rate": clean_float(royalty_3, 0),
+        "asset_discount_rate": clean_float(asset_rate, a["asset_discount_rate"]),
+        "licensee_wacc": clean_float(licensee_wacc, a["licensee_wacc"]),
+        "licensor_discount_rate": clean_float(licensor_rate, a["licensor_discount_rate"]),
     })
-    return validate_simulation_assumptions(a), max(10, min(int(n_sims or 1000), 10000))
+    return validate_simulation_assumptions(a), max(10, min(int(clean_float(n_sims, 1000)), 10000))
+
+
+def dcf_columns(years):
+    return [{"name": "Row Label", "id": "label"}] + [
+        {"name": [f"Year {i + 1}", str(year)], "id": f"y{i}"}
+        for i, year in enumerate(years)
+    ]
+
+
+def dcf_data(model):
+    data = []
+    for row in model["table_rows"]:
+        item = {"row_key": row.row_key, "label": row.label}
+        for i, value in enumerate(row.values):
+            item[f"y{i}"] = format_value(value, row.fmt)
+        data.append(item)
+    return data
 
 
 def mc_table_and_chart(mc, col, title):
@@ -343,20 +387,7 @@ def mc_table_and_chart(mc, col, title):
     return data, fig
 
 
-states = [
-    State("initial-population", "value"), State("population-growth", "value"),
-    State("target-patient-pct", "value"), State("diagnosis-rate", "value"),
-    State("treatment-rate", "value"), State("peak-penetration", "value"),
-    State("price-per-unit", "value"), State("launch-year", "value"),
-    State("rd-total", "value"), State("cogs-pct", "value"),
-    State("ga-opex-pct", "value"), State("tax-rate", "value"),
-    State("phase-i-success", "value"), State("phase-ii-success", "value"),
-    State("phase-iii-success", "value"), State("approval-success", "value"),
-    State("upfront", "value"), State("dev-ms", "value"), State("reg-ms", "value"),
-    State("comm-ms", "value"), State("royalty-1", "value"), State("royalty-2", "value"),
-    State("royalty-3", "value"), State("asset-rate", "value"),
-    State("licensee-wacc", "value"), State("licensor-rate", "value"), State("n-sims", "value"),
-]
+states = [State(component_id, "value") for component_id in INPUT_IDS]
 
 
 @app.callback(
@@ -376,22 +407,23 @@ def update_outputs(n_clicks, *values):
 
     dcf_styles = []
     for row_key in ["revenue", "gross_profit", "ebitda", "free_cash_flow", "rnpv", "licensee_enpv", "licensor_npv"]:
-        dcf_styles.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#f1f5f9", "fontWeight": "bold"})
+        dcf_styles.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#f1f5f9", "fontWeight": "800"})
     for row_key in ["section_market", "section_pl", "section_ptrs", "section_licensing", "section_valuation"]:
-        dcf_styles.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#dbeafe", "fontWeight": "bold"})
+        dcf_styles.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#dbeafe", "fontWeight": "900", "color": "#111827"})
 
     asset_table, asset_fig = mc_table_and_chart(mc, "rnpv", "Asset rNPV")
     licensee_table, licensee_fig = mc_table_and_chart(mc, "licensee_npv", "Licensee eNPV")
     licensor_table, licensor_fig = mc_table_and_chart(mc, "licensor_npv", "Licensor NPV")
 
-    if n_clicks:
-        status = f"Calculated with {n_sims:,} Monte Carlo runs. You can now review Asset, Licensee, and Licensor pages."
-    else:
-        status = f"Showing default model with {n_sims:,} Monte Carlo runs. Change inputs and click Run / Calculate Model."
+    status = (
+        f"Calculated with {n_sims:,} Monte Carlo runs. You can now review Asset, Licensee, and Licensor pages."
+        if n_clicks else
+        f"Showing default model with {n_sims:,} Monte Carlo runs. Change inputs and click Run / Calculate Model."
+    )
 
     return (
         status,
-        table_columns(model["years"]), table_data(model), dcf_styles,
+        dcf_columns(model["years"]), dcf_data(model), dcf_styles,
         money(summary["rnpv"]), pct(mc["rnpv"].gt(0).mean()), asset_table, asset_fig,
         money(summary["licensee_npv"]), pct(mc["licensee_npv"].gt(0).mean()), licensee_table, licensee_fig,
         money(summary["licensor_npv"]), pct(mc["licensor_npv"].gt(0).mean()), licensor_table, licensor_fig,
