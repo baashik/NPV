@@ -1,6 +1,6 @@
 """NPV Model — Dash callbacks for modular layout."""
 
-from dash import Input, Output, State, ctx, no_update, dcc, html
+from dash import Input, Output, State, ctx
 import plotly.graph_objs as go
 import numpy as np
 import pandas as pd
@@ -61,35 +61,60 @@ ASSUMPTION_INPUTS = {
 }
 
 
-def read_assumptions(_dict: dict) -> dict:
-    """Collect current assumption values from layout inputs."""
-    assumptions = {}
-    for key, comp_id in ASSUMPTION_INPUTS.items():
-        if comp_id in _dict:
-            val = _dict[comp_id]
-            if isinstance(val, str) and val == "":
-                val = None
-            assumptions[key] = val
-    return assumptions
+def _money(value):
+    return f"${value:.1f}M"
 
 
-def kpi_card(val: str, sub: str = "") -> html.Div:
-    return html.Div(val, style={"fontSize": "1.15rem", "fontWeight": "800",
-                                "color": COLORS["blue"], "marginTop": "2px"})
+def _empty_fig(title=""):
+    fig = go.Figure()
+    fig.update_layout(template="plotly_white", height=300, title=title, margin=dict(t=40, b=30))
+    return fig
+
+
+def run_monte_carlo(base_assumptions, overrides=None, n_sims=750, seed=42):
+    """Lightweight simulation around the current dashboard assumptions.
+
+    This is intentionally simple and transparent. It perturbs the key commercial,
+    timing, cost, discount-rate, and phase-success assumptions, then reuses the
+    deterministic model for each draw.
+    """
+    rng = np.random.default_rng(seed)
+    base = clean_assumptions(base_assumptions)
+    overrides = overrides or {}
+    results = []
+
+    for _ in range(n_sims):
+        a = dict(base)
+        a["price_per_unit"] = max(0, rng.normal(base["price_per_unit"], base["price_per_unit"] * 0.20))
+        a["peak_penetration"] = float(np.clip(rng.normal(base["peak_penetration"], max(base["peak_penetration"] * 0.25, 0.5)), 0.01, 100))
+        a["target_patient_pct"] = float(np.clip(rng.normal(base["target_patient_pct"], max(base["target_patient_pct"] * 0.20, 0.5)), 0.01, 100))
+        a["cogs_pct"] = float(np.clip(rng.normal(base["cogs_pct"], max(base["cogs_pct"] * 0.20, 1.0)), 0.0, 95.0))
+        a["asset_discount_rate"] = float(np.clip(rng.normal(base["asset_discount_rate"], 1.5), 0.1, 50.0))
+        a["launch_year"] = int(base["launch_year"] + rng.choice([-1, 0, 1], p=[0.25, 0.50, 0.25]))
+
+        for key in ["phase_i_success", "phase_ii_success", "phase_iii_success", "approval_success"]:
+            a[key] = float(np.clip(rng.normal(base[key], 10.0), 1.0, 99.0))
+
+        model = build_dcf_model(a, overrides)
+        s = model["summary"]
+        results.append({
+            "rnpv": s["rnpv"],
+            "licensee_npv": s["licensee_npv"],
+            "licensor_npv": s["licensor_npv"],
+        })
+
+    return pd.DataFrame(results)
 
 
 def register_callbacks(app):
     """Attach all callbacks to the Dash app instance."""
 
-    # ==========================================================================
-    # Navigation
-    # ==========================================================================
     nav_pages = [
-        ("nav-dcf",          "dcf"),
-        ("nav-licensee",     "licensee"),
-        ("nav-licensor",      "licensor"),
-        ("nav-monte-carlo",   "monte-carlo"),
-        ("nav-sensitivity",   "sensitivity"),
+        ("nav-dcf", "dcf"),
+        ("nav-licensee", "licensee"),
+        ("nav-licensor", "licensor"),
+        ("nav-monte-carlo", "monte-carlo"),
+        ("nav-sensitivity", "sensitivity"),
     ]
     page_ids = [p for _, p in nav_pages]
 
@@ -100,18 +125,11 @@ def register_callbacks(app):
     )
     def navigate(*args):
         triggered = ctx.triggered
-        if not triggered:
-            active = "dcf"
-        else:
-            active = triggered[0]["prop_id"].split(".")[0].replace("nav-", "")
-
+        active = "dcf" if not triggered else triggered[0]["prop_id"].split(".")[0].replace("nav-", "")
         styles = [{"display": "block" if p == active else "none"} for p in page_ids]
         actives = [p == active for p in page_ids]
         return styles + actives
 
-    # ==========================================================================
-    # DCF table manual overrides
-    # ==========================================================================
     @app.callback(
         Output("manual-overrides", "data"),
         Input("dcf-table", "data_timestamp"),
@@ -140,9 +158,6 @@ def register_callbacks(app):
                     pass
         return new_overrides
 
-    # ==========================================================================
-    # Main DCF update (triggered by any assumption input change)
-    # ==========================================================================
     assumption_input_ids = list(ASSUMPTION_INPUTS.values())
 
     @app.callback(
@@ -176,6 +191,11 @@ def register_callbacks(app):
         Output("licensee-wacc-output", "children"),
         Output("licensee-annual-cf-chart", "figure"),
         Output("licensee-cumulative-pv-chart", "figure"),
+        Output("mc-mean-rnpv", "children"),
+        Output("mc-median-rnpv", "children"),
+        Output("mc-p10-p90", "children"),
+        Output("mc-prob-positive", "children"),
+        Output("mc-histogram-chart", "figure"),
         Output("sens-base-npv", "children"),
         Output("sensitivity-tornado-chart", "figure"),
         Output("sensitivity-table", "data"),
@@ -184,27 +204,18 @@ def register_callbacks(app):
         State("manual-overrides", "data"),
         State("sens-metric", "value"),
     )
-    def update_dcf(
-        *vals_and_states
-    ):
+    def update_dcf(*vals_and_states):
         state_count = 2
         input_values = vals_and_states[:-state_count]
-        overrides = vals_and_states[-state_count]
+        overrides = vals_and_states[-state_count] or {}
         sens_metric = vals_and_states[-state_count + 1]
 
-        # Build assumptions dict from inputs
         a = dict(DEFAULT_ASSUMPTIONS)
-        for (key, comp_id), val in zip(ASSUMPTION_INPUTS.items(), input_values):
+        for (key, _), val in zip(ASSUMPTION_INPUTS.items(), input_values):
             if isinstance(val, str) and val == "":
                 val = None
             if val is not None:
-                if key in (
-                    "forecast_years",
-                    "start_year",
-                    "launch_year",
-                    "royalty_start_year",
-                    "royalty_end_year",
-                ):
+                if key in ("forecast_years", "start_year", "launch_year", "royalty_start_year", "royalty_end_year"):
                     try:
                         val = int(float(val))
                     except (TypeError, ValueError):
@@ -212,16 +223,11 @@ def register_callbacks(app):
                 a[key] = val
 
         a = clean_assumptions(a)
-        licensee_wacc = a.get("licensee_wacc", 10.0)
-
-        # Build model
-        model = build_dcf_model(a, overrides or {})
-
+        model = build_dcf_model(a, overrides)
         summary = model["summary"]
         rows = model["frame"]
         years = model["years"]
 
-        # --- Table ---
         columns = table_columns(years)
         tdata = table_data(model)
         style_cond = []
@@ -241,170 +247,126 @@ def register_callbacks(app):
                 "color": "#172033",
             })
 
-        style_cond.append({
-            "if": {"column_id": "y0"},
-            "borderLeft": "2px solid #1f6feb",
-        })
+        style_cond.append({"if": {"column_id": "y0"}, "borderLeft": "2px solid #1f6feb"})
+        override_status = f"{len(overrides)} manual override(s) applied" if overrides else ""
 
-        override_status = ""
-        if overrides:
-            n_overrides = len(overrides)
-            override_status = f"{n_overrides} manual override(s) applied"
-
-        # --- Summary cards ---
         s = summary
         cards = [
-            f"${s.get('rnpv', 0):.1f}M" if s.get('rnpv') is not None else "—",
-            f"${s.get('licensee_npv', 0):.1f}M" if s.get('licensee_npv') is not None else "—",
-            f"${s.get('licensor_npv', 0):.1f}M" if s.get('licensor_npv') is not None else "—",
-            f"${s.get('peak_revenue', 0):.1f}M" if s.get('peak_revenue') is not None else "—",
-            f"{s.get('peak_patients', 0):.1f}M" if s.get('peak_patients') is not None else "—",
-            f"{s.get('asset_discount_rate', 0) * 100:.1f}%" if s.get('asset_discount_rate') is not None else "—",
-            f"{s.get('licensee_wacc', 0) * 100:.1f}%" if s.get('licensee_wacc') is not None else "—",
-            f"{s.get('licensor_discount_rate', 0) * 100:.1f}%" if s.get('licensor_discount_rate') is not None else "—",
-            f"{s.get('approval_probability', 0) * 100:.1f}%" if s.get('approval_probability') is not None else "—",
-            str(s.get('launch_year', '—')),
-            f"{s.get('tax_rate', 0) * 100:.1f}%" if s.get('tax_rate') is not None else "—",
+            _money(s.get("rnpv", 0)) if s.get("rnpv") is not None else "—",
+            _money(s.get("licensee_npv", 0)) if s.get("licensee_npv") is not None else "—",
+            _money(s.get("licensor_npv", 0)) if s.get("licensor_npv") is not None else "—",
+            _money(s.get("peak_revenue", 0)) if s.get("peak_revenue") is not None else "—",
+            f"{s.get('peak_patients', 0):.1f}M" if s.get("peak_patients") is not None else "—",
+            f"{s.get('asset_discount_rate', 0) * 100:.1f}%" if s.get("asset_discount_rate") is not None else "—",
+            f"{s.get('licensee_wacc', 0) * 100:.1f}%" if s.get("licensee_wacc") is not None else "—",
+            f"{s.get('licensor_discount_rate', 0) * 100:.1f}%" if s.get("licensor_discount_rate") is not None else "—",
+            f"{s.get('approval_probability', 0) * 100:.1f}%" if s.get("approval_probability") is not None else "—",
+            str(s.get("launch_year", "—")),
+            f"{s.get('tax_rate', 0) * 100:.1f}%" if s.get("tax_rate") is not None else "—",
         ]
 
-        # --- Charts ---
         rev = rows["revenue"].values
-        fcf = rows["free_cash_flow"].values
         rafcf = rows["risk_adjusted_cf"].values
         ebitda = rows["ebitda"].values
         cogs = rows["cogs"].values
-        disc_fcf = rows["discounted_fcf"].values
 
         fig1 = go.Figure()
         fig1.add_trace(go.Bar(x=years, y=rev, name="Revenue", marker_color=COLORS["blue"], opacity=0.85))
         fig1.add_trace(go.Bar(x=years, y=[-c for c in cogs], name="COGS", marker_color="#667085", opacity=0.7))
         fig1.add_trace(go.Scatter(x=years, y=ebitda, name="EBITDA", line=dict(color=COLORS["amber"], width=2.5), mode="lines+markers"))
-        fig1.update_layout(template="plotly_white", height=340,
-                           title="Revenue vs EBITDA ($M)",
-                           legend=dict(orientation="h", y=1.02, x=1, xanchor="right"),
-                           margin=dict(t=40, b=30))
+        fig1.update_layout(template="plotly_white", height=340, title="Revenue vs EBITDA ($M)", legend=dict(orientation="h", y=1.02, x=1, xanchor="right"), margin=dict(t=40, b=30))
 
         fig2 = go.Figure()
         colors2 = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in rafcf]
         fig2.add_trace(go.Bar(x=years, y=rafcf, name="Risk-Adj FCF", marker_color=colors2, opacity=0.85))
-        fig2.add_trace(go.Scatter(x=years, y=list(np.cumsum(rafcf)), name="Cumulative",
-                                   line=dict(color=COLORS["blue"], width=2, dash="dot")))
+        fig2.add_trace(go.Scatter(x=years, y=list(np.cumsum(rafcf)), name="Cumulative", line=dict(color=COLORS["blue"], width=2, dash="dot")))
         fig2.add_hline(y=0, line_width=1, line_color="black", opacity=0.4)
-        fig2.update_layout(template="plotly_white", height=340,
-                           title="Risk-Adjusted FCF ($M)",
-                           legend=dict(orientation="h", y=1.02),
-                           margin=dict(t=40, b=30))
+        fig2.update_layout(template="plotly_white", height=340, title="Risk-Adjusted FCF ($M)", legend=dict(orientation="h", y=1.02), margin=dict(t=40, b=30))
 
-        # --- Licensor outputs ---
         lic_npv = s.get("licensor_npv", 0)
         lic_milestones = s.get("licensor_total_milestones", 0)
         lic_royalties = s.get("licensor_total_royalties", 0)
         lic_deal = lic_npv
-
         lic_risk_cf = rows.get("risk_adj_licensor_cash_flow", pd.Series([0] * len(years))).values
         disc_lic_cf = rows.get("discounted_licensor_cf", pd.Series([0] * len(years))).values
 
         fig3 = go.Figure(go.Waterfall(
             x=["Upfront", "Dev Milestone", "Reg Milestone", "Comm Milestone", "Royalties", "Total"],
             measure=["relative", "relative", "relative", "relative", "relative", "total"],
-            y=[rows.get("upfront_income", pd.Series([0])).sum(),
-               rows.get("development_milestone_income", pd.Series([0])).sum(),
-               rows.get("regulatory_milestone_income", pd.Series([0])).sum(),
-               rows.get("commercial_milestone_income", pd.Series([0])).sum(),
-               rows.get("royalty_income", pd.Series([0])).sum(),
-               0],
-            text=[f"${rows.get('upfront_income', pd.Series([0])).sum():.1f}M",
-                  f"${rows.get('development_milestone_income', pd.Series([0])).sum():.1f}M",
-                  f"${rows.get('regulatory_milestone_income', pd.Series([0])).sum():.1f}M",
-                  f"${rows.get('commercial_milestone_income', pd.Series([0])).sum():.1f}M",
-                  f"${rows.get('royalty_income', pd.Series([0])).sum():.1f}M",
-                  f"${lic_npv:.1f}M"],
+            y=[rows.get("upfront_income", pd.Series([0])).sum(), rows.get("development_milestone_income", pd.Series([0])).sum(), rows.get("regulatory_milestone_income", pd.Series([0])).sum(), rows.get("commercial_milestone_income", pd.Series([0])).sum(), rows.get("royalty_income", pd.Series([0])).sum(), 0],
+            text=[_money(rows.get("upfront_income", pd.Series([0])).sum()), _money(rows.get("development_milestone_income", pd.Series([0])).sum()), _money(rows.get("regulatory_milestone_income", pd.Series([0])).sum()), _money(rows.get("commercial_milestone_income", pd.Series([0])).sum()), _money(rows.get("royalty_income", pd.Series([0])).sum()), _money(lic_npv)],
             textposition="inside",
             increasing={"marker": {"color": COLORS["blue"]}},
             totals={"marker": {"color": COLORS["teal"]}},
         ))
-        fig3.update_layout(template="plotly_white", height=300,
-                           title=f"Licensor Bridge — ${lic_npv:.1f}M",
-                           margin=dict(t=30, b=20))
+        fig3.update_layout(template="plotly_white", height=300, title=f"Licensor Bridge — {_money(lic_npv)}", margin=dict(t=30, b=20))
 
-        colors_lic = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lic_risk_cf]
         fig4 = go.Figure()
-        fig4.add_trace(go.Bar(x=list(years), y=lic_risk_cf.tolist(), name="Risk-Adj CF",
-                              marker_color=colors_lic, opacity=0.85))
-        disc_cum_lic = np.cumsum(disc_lic_cf)
-        fig4.add_trace(go.Scatter(x=list(years), y=disc_cum_lic.tolist(), name="Cum. PV",
-                                  line=dict(color=COLORS["amber"], width=2)))
-        fig4.update_layout(template="plotly_white", height=280,
-                           title="Annual Risk-Adjusted Licensor CF",
-                           margin=dict(t=30, b=20),
-                           legend=dict(orientation="h", y=1.06))
+        colors_lic = [COLORS["teal"] if v >= 0 else COLORS["red"] for v in lic_risk_cf]
+        fig4.add_trace(go.Bar(x=list(years), y=lic_risk_cf.tolist(), name="Risk-Adj CF", marker_color=colors_lic, opacity=0.85))
+        fig4.add_trace(go.Scatter(x=list(years), y=np.cumsum(disc_lic_cf).tolist(), name="Cum. PV", line=dict(color=COLORS["amber"], width=2)))
+        fig4.update_layout(template="plotly_white", height=280, title="Annual Risk-Adjusted Licensor CF", margin=dict(t=30, b=20), legend=dict(orientation="h", y=1.06))
 
-        # --- Licensee outputs ---
         le_npv = s.get("licensee_npv", 0)
         le_payments = s.get("total_licensee_payments_to_licensor", 0)
         le_peak_rev = s.get("peak_revenue", 0)
-        le_wacc = (licensee_wacc or 10.0) / 100.0
-
-        lic_risk_cf_vals = rows.get("licensee_risk_adjusted_cf", pd.Series([0] * len(years))).values
+        licensee_wacc = a.get("licensee_wacc", 10.0)
+        licensee_risk_cf_vals = rows.get("licensee_risk_adjusted_cf", pd.Series([0] * len(years))).values
         le_disc_factor = rows.get("licensee_discount_factor", pd.Series([1.0] * len(years))).values
 
         fig5 = go.Figure()
-        colors_le = [COLORS["blue"] if v >= 0 else COLORS["red"] for v in lic_risk_cf_vals]
-        fig5.add_trace(go.Bar(x=list(years), y=lic_risk_cf_vals.tolist(), name="Risk-Adj CF",
-                              marker_color=colors_le, opacity=0.85))
-        fig5.update_layout(template="plotly_white", height=300,
-                           title="Annual Risk-Adjusted Licensee CF",
-                           margin=dict(t=30, b=20),
-                           legend=dict(orientation="h", y=1.06))
+        colors_le = [COLORS["blue"] if v >= 0 else COLORS["red"] for v in licensee_risk_cf_vals]
+        fig5.add_trace(go.Bar(x=list(years), y=licensee_risk_cf_vals.tolist(), name="Risk-Adj CF", marker_color=colors_le, opacity=0.85))
+        fig5.update_layout(template="plotly_white", height=300, title="Annual Risk-Adjusted Licensee CF", margin=dict(t=30, b=20), legend=dict(orientation="h", y=1.06))
 
-        le_disc_cum = np.cumsum(lic_risk_cf_vals * le_disc_factor)
         fig6 = go.Figure()
-        fig6.add_trace(go.Scatter(x=list(years), y=le_disc_cum.tolist(), name="Cum. PV (Lic. WACC)",
-                                  line=dict(color=COLORS["blue"], width=2.5),
-                                  fill="tozeroy", fillcolor="rgba(31,111,235,0.1)"))
-        fig6.update_layout(template="plotly_white", height=280,
-                           title="Cumulative Discounted Licensee CF",
-                           margin=dict(t=30, b=20),
-                           legend=dict(orientation="h", y=1.06))
-
-        # --- Sensitivity ---
-        metric_key = sens_metric or "core_dcf_npv"
-        if metric_key == "licensee_npv":
-            base_display = f"Base: ${s.get('licensee_npv', 0):.1f}M"
-        elif metric_key == "licensor_npv":
-            base_display = f"Base: ${s.get('licensor_npv', 0):.1f}M"
-        else:
-            base_display = f"Base: ${s.get('rnpv', 0):.1f}M"
+        fig6.add_trace(go.Scatter(x=list(years), y=np.cumsum(licensee_risk_cf_vals * le_disc_factor).tolist(), name="Cum. PV (Lic. WACC)", line=dict(color=COLORS["blue"], width=2.5), fill="tozeroy", fillcolor="rgba(31,111,235,0.1)"))
+        fig6.update_layout(template="plotly_white", height=280, title="Cumulative Discounted Licensee CF", margin=dict(t=30, b=20), legend=dict(orientation="h", y=1.06))
 
         try:
-            sens_df = run_sensitivity(dict(DEFAULT_ASSUMPTIONS), selected_metric=metric_key)
+            mc_df = run_monte_carlo(a, overrides)
+            rnpv = mc_df["rnpv"]
+            mc_mean = _money(float(rnpv.mean()))
+            mc_median = _money(float(rnpv.median()))
+            mc_p10_p90 = f"{_money(float(rnpv.quantile(0.10)))} / {_money(float(rnpv.quantile(0.90)))}"
+            mc_prob_positive = f"{(rnpv.gt(0).mean() * 100):.1f}%"
+            mc_fig = go.Figure()
+            mc_fig.add_trace(go.Histogram(x=rnpv, nbinsx=40, name="rNPV", marker_color=COLORS["blue"], opacity=0.85))
+            mc_fig.add_vline(x=0, line_color="black", line_width=1)
+            mc_fig.update_layout(template="plotly_white", height=360, title="Monte Carlo rNPV Distribution ($M)", xaxis_title="rNPV ($M)", yaxis_title="Simulation Count", margin=dict(t=40, b=35))
         except Exception:
-            sens_df = pd.DataFrame(columns=["variable", "low_case", "base_case", "high_case",
-                                             "low_npv", "base_npv", "high_npv",
-                                             "delta_low", "delta_high", "absolute_impact"])
+            mc_mean = mc_median = mc_p10_p90 = mc_prob_positive = "—"
+            mc_fig = _empty_fig("Monte Carlo rNPV Distribution ($M)")
+
+        metric_key = sens_metric or "core_dcf_npv"
+        if metric_key == "licensee_npv":
+            base_display = f"Base: {_money(s.get('licensee_npv', 0))}"
+        elif metric_key == "licensor_npv":
+            base_display = f"Base: {_money(s.get('licensor_npv', 0))}"
+        else:
+            base_display = f"Base: {_money(s.get('rnpv', 0))}"
+
+        try:
+            sens_df = run_sensitivity(a, overrides, selected_metric=metric_key)
+        except Exception:
+            sens_df = pd.DataFrame(columns=["variable", "low_case", "base_case", "high_case", "low_npv", "base_npv", "high_npv", "delta_low", "delta_high", "absolute_impact"])
 
         fig7 = go.Figure()
         for _, row in sens_df.iterrows():
-            lb, lv, hv = row["variable"], row["delta_low"], row["delta_high"]
-            fig7.add_trace(go.Bar(y=[lb], x=[lv], orientation="h", marker_color=COLORS["red"], showlegend=False))
-            fig7.add_trace(go.Bar(y=[lb], x=[hv], orientation="h", marker_color=COLORS["blue"], showlegend=False))
+            fig7.add_trace(go.Bar(y=[row["variable"]], x=[row["delta_low"]], orientation="h", marker_color=COLORS["red"], showlegend=False))
+            fig7.add_trace(go.Bar(y=[row["variable"]], x=[row["delta_high"]], orientation="h", marker_color=COLORS["blue"], showlegend=False))
         fig7.add_vline(x=0, line_color="black", line_width=1.5)
-        fig7.update_layout(template="plotly_white", height=400,
-                           title=f"Tornado — {metric_key.replace('_', ' ').title()}",
-                           xaxis_title="Δ NPV ($M)", margin=dict(l=160, t=40, b=30),
-                           barmode="relative", showlegend=False)
+        fig7.update_layout(template="plotly_white", height=400, title=f"Tornado — {metric_key.replace('_', ' ').title()}", xaxis_title="Δ NPV ($M)", margin=dict(l=160, t=40, b=30), barmode="relative", showlegend=False)
 
-        sens_table = []
-        for _, row in sens_df.iterrows():
-            sens_table.append({
-                "Variable": row["variable"],
-                "Low": row["low_case"],
-                "Base": row["base_case"],
-                "High": row["high_case"],
-                "Δ Low": f"{row['delta_low']:.1f}",
-                "Δ High": f"{row['delta_high']:.1f}",
-                "Impact": f"{row['absolute_impact']:.1f}",
-            })
+        sens_table = [{
+            "Variable": row["variable"],
+            "Low": row["low_case"],
+            "Base": row["base_case"],
+            "High": row["high_case"],
+            "Δ Low": f"{row['delta_low']:.1f}",
+            "Δ High": f"{row['delta_high']:.1f}",
+            "Impact": f"{row['absolute_impact']:.1f}",
+        } for _, row in sens_df.iterrows()]
         sens_cols = [
             {"name": "Variable", "id": "Variable"},
             {"name": "Low Case", "id": "Low"},
@@ -419,25 +381,14 @@ def register_callbacks(app):
             columns, tdata, style_cond, tdata, override_status,
             *cards,
             fig1, fig2,
-            f"${lic_npv:.1f}M",
-            f"${lic_milestones:.1f}M",
-            f"${lic_royalties:.1f}M",
-            f"${lic_deal:.1f}M",
+            _money(lic_npv), _money(lic_milestones), _money(lic_royalties), _money(lic_deal),
             fig3, fig4,
-            f"${le_npv:.1f}M",
-            f"${le_payments:.1f}M",
-            f"${le_peak_rev:.1f}M",
-            f"{(licensee_wacc or 10.0):.1f}%",
+            _money(le_npv), _money(le_payments), _money(le_peak_rev), f"{(licensee_wacc or 10.0):.1f}%",
             fig5, fig6,
-            base_display,
-            fig7,
-            sens_table,
-            sens_cols,
+            mc_mean, mc_median, mc_p10_p90, mc_prob_positive, mc_fig,
+            base_display, fig7, sens_table, sens_cols,
         )
 
-    # ==========================================================================
-    # Reset overrides
-    # ==========================================================================
     @app.callback(
         Output("manual-overrides", "data", allow_duplicate=True),
         Input("reset-overrides", "n_clicks"),
