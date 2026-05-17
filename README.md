@@ -10,48 +10,52 @@ pinned: false
 
 # Licensing Monte Carlo NPV
 
-A Dash web app for modeling a licensing deal using Monte Carlo simulation and discounted cash flow analysis.
+A Dash web app for modelling a biopharma licensing deal using discounted cash flow analysis, licensor/licensee deal economics, one-way sensitivity, and a lightweight Monte Carlo simulation.
 
-## Code Structure
+## What the App Does
 
-- the full modular architecture (5 files instead of 1 monolith)
-- vectorized Monte Carlo engine (~10-40x faster)
-- optimized single-scenario DCF engine
-- typed data models (ScenarioParams dataclass)
-- precomputed static arrays (ADOPTION_ARRAY, RD_ARRAY)
-- sensitivity analysis framework (6-variable sweep)
-- clean Dash app with split layout/callbacks/engine
-- fixed LCF (tax loss carry-forward) logic
+- Builds a deterministic DCF from editable market, cost, tax, discount-rate, phase-success, and licensing assumptions.
+- Shows asset rNPV, licensee eNPV, licensor NPV, peak revenue, peak patients, launch year, and probability to approval.
+- Links the licensee and licensor models through upfront, milestone, and tiered royalty economics.
+- Provides a tornado sensitivity chart based on the current dashboard assumptions.
+- Runs a lightweight Monte Carlo simulation around the current assumptions for rNPV distribution, mean, median, P10/P90, and probability of positive rNPV.
 
-## Files
+## Current File Structure
 
-```
-app.py        — Entry point. Creates Dash app, registers callbacks, starts server.
-config.py     — Constants, precomputed arrays, ScenarioParams dataclass.
-engine.py     — Vectorized Monte Carlo, scenario runner, NPV stats, sensitivity.
-ui.py         — Layout components, DCF table, chart builders.
-callbacks.py  — Save/load/delete/export scenarios, run simulation, render tabs.
+```text
+app.py          — Dash entry point. Creates the app, exposes server, and registers callbacks.
+callbacks.py    — Navigation, DCF updates, table overrides, sensitivity, charts, and Monte Carlo outputs.
+layout.py       — Dashboard layout, assumption panel, tabs, tables, cards, and charts.
+model_engine.py — Deterministic DCF engine, licensor/licensee economics, formatting, and sensitivity logic.
+styles.py       — Shared colours and layout styling.
+requirements.txt
+Dockerfile
 ```
 
 ## Deal Setup
 
-- **Drug:** Pipeline asset (Phase I)
-- **Indication:** Fibrosis
+- **Asset:** Pipeline asset
 - **Stage:** Phase I
 - **Territory:** EU exclusive license
-- **Parties:** Licensor and Licensee
+- **Parties:** Licensor and licensee
 
-## What it Estimates
+## Unit Note
 
-- Licensee base-case eNPV
-- Licensor base-case deal NPV
-- Monte Carlo outcome distributions
-- Annual DCF outputs
-- Revenue and probability charts
+Patient counts are expressed in millions. Revenue is shown in currency millions, so:
+
+```text
+Patients Treated (M) × Price Per Unit = Revenue ($M)
+```
+
+## Monte Carlo Note
+
+The current Monte Carlo simulation is intentionally lightweight and transparent. It varies key commercial, timing, cost, discount-rate, and phase-success assumptions around the current dashboard inputs. It is useful for directional investor discussion, but it should be refined further before being treated as a formal statistical valuation.
 
 ## Technical Stack
 
-- **Dash** + **Dash Bootstrap Components** (UI)
-- **NumPy** (vectorized engine)
-- **Plotly** (charts)
-- **Docker** (Hugging Face Spaces deployment)
+- Dash
+- Dash Bootstrap Components
+- NumPy
+- Pandas
+- Plotly
+- Docker / Gunicorn deployment
