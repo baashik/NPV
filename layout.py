@@ -6,7 +6,7 @@ from dash import dcc, html, dash_table
 import dash_bootstrap_components as dbc
 
 from model_engine import DEFAULT_ASSUMPTIONS
-from styles import CARD, COLORS, CONTENT, PAGE, SIDEBAR, SMALL_LABEL, TABLE_CELL, TABLE_HEADER, TABLE_STYLE
+from styles import CARD, COLORS, CONTENT, PAGE, SIDEBAR, SMALL_LABEL
 
 
 def field(label, component):
@@ -39,8 +39,12 @@ def assumption_panel():
                 [
                     html.H5("Assumptions", style={"fontWeight": "800", "marginBottom": "4px"}),
                     html.Div(
-                        "Inputs update the DCF automatically. Table edits override individual forecast cells.",
+                        "Inputs update the DCF, sensitivity, and Monte Carlo outputs automatically. Table edits override individual forecast cells.",
                         style={"color": COLORS["muted"], "fontSize": "0.88rem"},
+                    ),
+                    html.Div(
+                        "Unit note: patient counts are in millions. Revenue is shown in $M, so Patients Treated (M) × Price Per Unit = Revenue ($M).",
+                        style={"color": COLORS["muted"], "fontSize": "0.82rem", "marginTop": "6px"},
                     ),
                 ],
                 style={"marginBottom": "14px"},
@@ -180,55 +184,12 @@ def dcf_table():
                 editable=True,
                 merge_duplicate_headers=True,
                 page_action="none",
-                style_table={
-                    "overflowX": "auto",
-                    "overflowY": "auto",
-                    "maxHeight": "620px",
-                    "width": "100%",
-                    "minWidth": "100%",
-                    "border": f"1px solid {COLORS['border']}",
-                    "borderRadius": "8px",
-                },
-                style_cell={
-                    "fontFamily": "Menlo, Consolas, 'SFMono-Regular', monospace",
-                    "fontSize": "12px",
-                    "padding": "7px 9px",
-                    "border": f"1px solid {COLORS['border']}",
-                    "whiteSpace": "nowrap",
-                    "textAlign": "right",
-                    "minWidth": "95px",
-                    "width": "95px",
-                    "maxWidth": "120px",
-                },
-                style_header={
-                    "backgroundColor": COLORS["header"],
-                    "color": COLORS["text"],
-                    "fontWeight": "800",
-                    "textAlign": "center",
-                    "border": f"1px solid {COLORS['border']}",
-                    "fontSize": "12px",
-                    "whiteSpace": "normal",
-                    "height": "36px",
-                },
+                style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "620px", "width": "100%", "minWidth": "100%", "border": f"1px solid {COLORS['border']}", "borderRadius": "8px"},
+                style_cell={"fontFamily": "Menlo, Consolas, 'SFMono-Regular', monospace", "fontSize": "12px", "padding": "7px 9px", "border": f"1px solid {COLORS['border']}", "whiteSpace": "nowrap", "textAlign": "right", "minWidth": "95px", "width": "95px", "maxWidth": "120px"},
+                style_header={"backgroundColor": COLORS["header"], "color": COLORS["text"], "fontWeight": "800", "textAlign": "center", "border": f"1px solid {COLORS['border']}", "fontSize": "12px", "whiteSpace": "normal", "height": "36px"},
                 style_cell_conditional=[
-                    {
-                        "if": {"column_id": "label"},
-                        "textAlign": "left",
-                        "fontWeight": "700",
-                        "minWidth": "270px",
-                        "width": "270px",
-                        "maxWidth": "360px",
-                        "backgroundColor": "#fbfcfd",
-                    },
-                    {
-                        "if": {"column_id": "edit"},
-                        "textAlign": "center",
-                        "minWidth": "44px",
-                        "width": "44px",
-                        "maxWidth": "44px",
-                        "color": COLORS["accent"],
-                        "fontWeight": "800",
-                    },
+                    {"if": {"column_id": "label"}, "textAlign": "left", "fontWeight": "700", "minWidth": "270px", "width": "270px", "maxWidth": "360px", "backgroundColor": "#fbfcfd"},
+                    {"if": {"column_id": "edit"}, "textAlign": "center", "minWidth": "44px", "width": "44px", "maxWidth": "44px", "color": COLORS["accent"], "fontWeight": "800"},
                 ],
                 css=[
                     {"selector": ".dash-spreadsheet td div", "rule": "line-height: 18px;"},
@@ -257,39 +218,15 @@ def dcf_page():
 def licensor_page():
     return html.Div(
         [
-            html.Div(
-                [
-                    html.H4("Licensor Model", style={"fontWeight": "800"}),
-                    html.Div("Deal economics connected to the DCF forecast: upfronts, milestones, tiered royalties, and licensor NPV.",
-                             style={"color": COLORS["muted"]}),
-                ],
-                style={"marginBottom": "16px"},
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(html.Div([html.Div("Licensor NPV", style=SMALL_LABEL),
-                                      html.H4(id="licensor-npv", style={"color": COLORS["teal"]})],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Total Milestones", style=SMALL_LABEL),
-                                      html.H4(id="licensor-total-milestones")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Total Royalties", style=SMALL_LABEL),
-                                      html.H4(id="licensor-total-royalties")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Total Deal Value", style=SMALL_LABEL),
-                                      html.H4(id="licensor-total-deal-value")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                ],
-                className="g-3 mb-3",
-            ),
-            html.Div(
-                dcc.Graph(id="licensor-bridge-chart", config={"displayModeBar": False}),
-                style={**CARD, "padding": "10px", "marginBottom": "14px"},
-            ),
-            html.Div(
-                dcc.Graph(id="licensor-annual-cf-chart", config={"displayModeBar": False}),
-                style={**CARD, "padding": "10px"},
-            ),
+            html.Div([html.H4("Licensor Model", style={"fontWeight": "800"}), html.Div("Deal economics connected to the DCF forecast: upfronts, milestones, tiered royalties, and licensor NPV.", style={"color": COLORS["muted"]})], style={"marginBottom": "16px"}),
+            dbc.Row([
+                dbc.Col(html.Div([html.Div("Licensor NPV", style=SMALL_LABEL), html.H4(id="licensor-npv", style={"color": COLORS["teal"]})], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Total Milestones", style=SMALL_LABEL), html.H4(id="licensor-total-milestones")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Total Royalties", style=SMALL_LABEL), html.H4(id="licensor-total-royalties")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Total Deal Value", style=SMALL_LABEL), html.H4(id="licensor-total-deal-value")], style={**CARD, "padding": "18px"}), md=3),
+            ], className="g-3 mb-3"),
+            html.Div(dcc.Graph(id="licensor-bridge-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px", "marginBottom": "14px"}),
+            html.Div(dcc.Graph(id="licensor-annual-cf-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px"}),
         ],
         style={**CARD, "padding": "20px"},
     )
@@ -298,39 +235,15 @@ def licensor_page():
 def licensee_page():
     return html.Div(
         [
-            html.Div(
-                [
-                    html.H4("Licensee Model", style={"fontWeight": "800"}),
-                    html.Div("Licensee cash flows after royalty and milestone payments to licensor.",
-                             style={"color": COLORS["muted"]}),
-                ],
-                style={"marginBottom": "16px"},
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(html.Div([html.Div("Licensee NPV", style=SMALL_LABEL),
-                                      html.H4(id="licensee-npv", style={"color": COLORS["blue"]})],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Total Payments to Licensor", style=SMALL_LABEL),
-                                      html.H4(id="licensee-total-payments")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Peak Revenue", style=SMALL_LABEL),
-                                      html.H4(id="licensee-peak-revenue")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Licensee WACC", style=SMALL_LABEL),
-                                      html.H4(id="licensee-wacc-output")],
-                                     style={**CARD, "padding": "18px"}), md=3),
-                ],
-                className="g-3 mb-3",
-            ),
-            html.Div(
-                dcc.Graph(id="licensee-annual-cf-chart", config={"displayModeBar": False}),
-                style={**CARD, "padding": "10px", "marginBottom": "14px"},
-            ),
-            html.Div(
-                dcc.Graph(id="licensee-cumulative-pv-chart", config={"displayModeBar": False}),
-                style={**CARD, "padding": "10px"},
-            ),
+            html.Div([html.H4("Licensee Model", style={"fontWeight": "800"}), html.Div("Licensee cash flows after royalty and milestone payments to licensor.", style={"color": COLORS["muted"]})], style={"marginBottom": "16px"}),
+            dbc.Row([
+                dbc.Col(html.Div([html.Div("Licensee NPV", style=SMALL_LABEL), html.H4(id="licensee-npv", style={"color": COLORS["blue"]})], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Total Payments to Licensor", style=SMALL_LABEL), html.H4(id="licensee-total-payments")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Peak Revenue", style=SMALL_LABEL), html.H4(id="licensee-peak-revenue")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Licensee WACC", style=SMALL_LABEL), html.H4(id="licensee-wacc-output")], style={**CARD, "padding": "18px"}), md=3),
+            ], className="g-3 mb-3"),
+            html.Div(dcc.Graph(id="licensee-annual-cf-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px", "marginBottom": "14px"}),
+            html.Div(dcc.Graph(id="licensee-cumulative-pv-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px"}),
         ],
         style={**CARD, "padding": "20px"},
     )
@@ -339,56 +252,13 @@ def licensee_page():
 def sensitivity_page():
     return html.Div(
         [
-            html.Div(
-                [
-                    html.H4("Sensitivity / Tornado", style={"fontWeight": "800"}),
-                    html.Div("One-way sensitivity analysis on the deterministic DCF model.",
-                             style={"color": COLORS["muted"]}),
-                ],
-                style={"marginBottom": "16px"},
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(
-                        [
-                            field("Metric", dcc.Dropdown(
-                                id="sens-metric", value="core_dcf_npv",
-                                options=[
-                                    {"label": "Core DCF NPV", "value": "core_dcf_npv"},
-                                    {"label": "Licensee eNPV", "value": "licensee_npv"},
-                                    {"label": "Licensor NPV", "value": "licensor_npv"},
-                                ],
-                                clearable=False, style={"fontSize": "0.86rem"},
-                            )),
-                        ],
-                        lg=3, md=4,
-                    ),
-                    dbc.Col(
-                        html.Div(id="sens-base-npv", style={"fontSize": "1rem", "fontWeight": "800",
-                                                            "paddingTop": "22px", "color": COLORS["blue"]}),
-                        lg=2, md=3,
-                    ),
-                ],
-                className="g-2 mb-3",
-            ),
-            html.Div(
-                dcc.Graph(id="sensitivity-tornado-chart", config={"displayModeBar": False}),
-                style={**CARD, "padding": "10px", "marginBottom": "14px"},
-            ),
-            dash_table.DataTable(
-                id="sensitivity-table",
-                columns=[],
-                data=[],
-                editable=False,
-                merge_duplicate_headers=True,
-                page_action="none",
-                style_table={"fontSize": "0.8rem"},
-                style_cell={"fontFamily": "monospace", "fontSize": "0.78rem",
-                            "padding": "3px 6px", "textAlign": "right",
-                            "border": "1px solid #e9ecef"},
-                style_header={"backgroundColor": "#1f6feb", "color": "white",
-                             "fontWeight": "700", "fontSize": "0.78rem"},
-            ),
+            html.Div([html.H4("Sensitivity / Tornado", style={"fontWeight": "800"}), html.Div("One-way sensitivity analysis based on the current dashboard assumptions.", style={"color": COLORS["muted"]})], style={"marginBottom": "16px"}),
+            dbc.Row([
+                dbc.Col([field("Metric", dcc.Dropdown(id="sens-metric", value="core_dcf_npv", options=[{"label": "Core DCF NPV", "value": "core_dcf_npv"}, {"label": "Licensee eNPV", "value": "licensee_npv"}, {"label": "Licensor NPV", "value": "licensor_npv"}], clearable=False, style={"fontSize": "0.86rem"}))], lg=3, md=4),
+                dbc.Col(html.Div(id="sens-base-npv", style={"fontSize": "1rem", "fontWeight": "800", "paddingTop": "22px", "color": COLORS["blue"]}), lg=2, md=3),
+            ], className="g-2 mb-3"),
+            html.Div(dcc.Graph(id="sensitivity-tornado-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px", "marginBottom": "14px"}),
+            dash_table.DataTable(id="sensitivity-table", columns=[], data=[], editable=False, merge_duplicate_headers=True, page_action="none", style_table={"fontSize": "0.8rem"}, style_cell={"fontFamily": "monospace", "fontSize": "0.78rem", "padding": "3px 6px", "textAlign": "right", "border": "1px solid #e9ecef"}, style_header={"backgroundColor": "#1f6feb", "color": "white", "fontWeight": "700", "fontSize": "0.78rem"}),
         ],
         style={**CARD, "padding": "20px"},
     )
@@ -397,29 +267,14 @@ def sensitivity_page():
 def monte_carlo_page():
     return html.Div(
         [
-            html.Div(
-                [
-                    html.H4("Monte Carlo", style={"fontWeight": "800"}),
-                    html.Div("Monte Carlo simulation coming soon.",
-                             style={"color": COLORS["muted"]}),
-                ],
-                style={"marginBottom": "16px"},
-            ),
-            dbc.Row(
-                [
-                    dbc.Col(html.Div([html.Div("Mean rNPV", style=SMALL_LABEL),
-                                      html.H4(id="mc-mean-rnpv")], style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Median rNPV", style=SMALL_LABEL),
-                                      html.H4(id="mc-median-rnpv")], style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("P10 / P90", style=SMALL_LABEL),
-                                      html.H4(id="mc-p10-p90")], style={**CARD, "padding": "18px"}), md=3),
-                    dbc.Col(html.Div([html.Div("Probability rNPV > 0", style=SMALL_LABEL),
-                                      html.H4(id="mc-prob-positive")], style={**CARD, "padding": "18px"}), md=3),
-                ],
-                className="g-3 mb-3",
-            ),
-            html.Div(dcc.Graph(id="mc-histogram-chart", config={"displayModeBar": False}),
-                     style={**CARD, "padding": "10px"}),
+            html.Div([html.H4("Monte Carlo", style={"fontWeight": "800"}), html.Div("Lightweight simulation using the current dashboard assumptions. Key drivers are varied around price, penetration, patient pool, COGS, discount rate, launch timing, and phase-success rates.", style={"color": COLORS["muted"]})], style={"marginBottom": "16px"}),
+            dbc.Row([
+                dbc.Col(html.Div([html.Div("Mean rNPV", style=SMALL_LABEL), html.H4(id="mc-mean-rnpv")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Median rNPV", style=SMALL_LABEL), html.H4(id="mc-median-rnpv")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("P10 / P90", style=SMALL_LABEL), html.H4(id="mc-p10-p90")], style={**CARD, "padding": "18px"}), md=3),
+                dbc.Col(html.Div([html.Div("Probability rNPV > 0", style=SMALL_LABEL), html.H4(id="mc-prob-positive")], style={**CARD, "padding": "18px"}), md=3),
+            ], className="g-3 mb-3"),
+            html.Div(dcc.Graph(id="mc-histogram-chart", config={"displayModeBar": False}), style={**CARD, "padding": "10px"}),
         ],
         style={**CARD, "padding": "20px"},
     )
@@ -429,18 +284,14 @@ def sidebar():
     return html.Div(
         [
             html.Div("NPV", style={"fontSize": "1.4rem", "fontWeight": "900", "marginBottom": "2px"}),
-            html.Div("Modular DCF Dashboard", style={"fontSize": "0.8rem", "color": COLORS["muted"], "marginBottom": "22px"}),
-            dbc.Nav(
-                [
-                    dbc.NavLink("Assumptions + DCF", id="nav-dcf", active=True, n_clicks=0),
-                    dbc.NavLink("Licensee Model", id="nav-licensee", active=False, n_clicks=0),
-                    dbc.NavLink("Licensor Bridge", id="nav-licensor", active=False, n_clicks=0),
-                    dbc.NavLink("Monte Carlo", id="nav-monte-carlo", active=False, n_clicks=0),
-                    dbc.NavLink("Sensitivity", id="nav-sensitivity", active=False, n_clicks=0),
-                ],
-                vertical=True,
-                pills=True,
-            ),
+            html.Div("Biopharma DCF Dashboard", style={"fontSize": "0.8rem", "color": COLORS["muted"], "marginBottom": "22px"}),
+            dbc.Nav([
+                dbc.NavLink("Assumptions + DCF", id="nav-dcf", active=True, n_clicks=0),
+                dbc.NavLink("Licensee Model", id="nav-licensee", active=False, n_clicks=0),
+                dbc.NavLink("Licensor Bridge", id="nav-licensor", active=False, n_clicks=0),
+                dbc.NavLink("Monte Carlo", id="nav-monte-carlo", active=False, n_clicks=0),
+                dbc.NavLink("Sensitivity", id="nav-sensitivity", active=False, n_clicks=0),
+            ], vertical=True, pills=True),
             html.Hr(),
             html.Div(id="override-status", style={"fontSize": "0.75rem", "color": COLORS["muted"]}),
         ],
@@ -448,33 +299,12 @@ def sidebar():
     )
 
 
-def scenario_bar():
+def model_note_bar():
     return html.Div(
-        dbc.Row(
-            [
-                dbc.Col(field("Scenario", dbc.Input(id="scenario-name", value="Base Case", type="text", size="sm")), lg=3, md=6),
-                dbc.Col(
-                    field("Load Saved",
-                          dcc.Dropdown(id="scenario-dropdown", options=[], placeholder="Select saved scenario",
-                                       style={"fontSize": "0.86rem"})),
-                    lg=3, md=6,
-                ),
-                dbc.Col(
-                    html.Div(
-                        [
-                            dbc.Button("Save", id="save-scenario", color="primary", size="sm"),
-                            dbc.Button("Load", id="load-scenario", color="secondary", outline=True, size="sm"),
-                            dbc.Button("Delete", id="delete-scenario", color="danger", outline=True, size="sm"),
-                        ],
-                        style={"display": "flex", "gap": "8px", "alignItems": "end", "height": "100%"},
-                    ),
-                    lg=4, md=8,
-                ),
-                dbc.Col(html.Div(id="scenario-status", style={"fontSize": "0.82rem", "color": COLORS["muted"], "paddingTop": "24px"}),
-                        lg=2, md=4),
-            ],
-            className="g-2 align-items-end",
-        ),
+        dbc.Row([
+            dbc.Col(html.Div("Model note", style={"fontSize": "0.72rem", "fontWeight": "800", "color": COLORS["muted"]}), lg=2, md=3),
+            dbc.Col(html.Div("This dashboard is a deterministic DCF with live sensitivity and a lightweight Monte Carlo simulation. Scenario save/load is not enabled yet.", style={"fontSize": "0.86rem", "color": COLORS["text"]}), lg=10, md=9),
+        ], className="g-2 align-items-center"),
         style={**CARD, "padding": "14px 16px", "marginBottom": "18px"},
     )
 
@@ -484,26 +314,17 @@ def build_layout():
         [
             dcc.Store(id="manual-overrides", data={}),
             dcc.Store(id="last-table-data", data=[]),
-            dcc.Store(id="saved-scenarios", data={}),
-            dcc.Store(id="active-page", data="dcf"),
-            dcc.Download(id="download-export"),
-            html.Div(
-                [
-                    sidebar(),
-                    html.Main(
-                        [
-                            scenario_bar(),
-                            html.Div(id="page-dcf", children=dcf_page()),
-                            html.Div(id="page-licensee", children=licensee_page(), style={"display": "none"}),
-                            html.Div(id="page-licensor", children=licensor_page(), style={"display": "none"}),
-                            html.Div(id="page-monte-carlo", children=monte_carlo_page(), style={"display": "none"}),
-                            html.Div(id="page-sensitivity", children=sensitivity_page(), style={"display": "none"}),
-                        ],
-                        style=CONTENT,
-                    ),
-                ],
-                style={"display": "flex", "alignItems": "stretch"},
-            ),
+            html.Div([
+                sidebar(),
+                html.Main([
+                    model_note_bar(),
+                    html.Div(id="page-dcf", children=dcf_page()),
+                    html.Div(id="page-licensee", children=licensee_page(), style={"display": "none"}),
+                    html.Div(id="page-licensor", children=licensor_page(), style={"display": "none"}),
+                    html.Div(id="page-monte-carlo", children=monte_carlo_page(), style={"display": "none"}),
+                    html.Div(id="page-sensitivity", children=sensitivity_page(), style={"display": "none"}),
+                ], style=CONTENT),
+            ], style={"display": "flex", "alignItems": "stretch"}),
         ],
         style=PAGE,
     )
