@@ -16,6 +16,7 @@ from model_engine import (
     run_sensitivity,
     DEFAULT_ASSUMPTIONS,
 )
+from monte_carlo import run_biotech_monte_carlo, validate_simulation_assumptions
 from styles import COLORS
 
 
@@ -69,41 +70,6 @@ def _empty_fig(title=""):
     fig = go.Figure()
     fig.update_layout(template="plotly_white", height=300, title=title, margin=dict(t=40, b=30))
     return fig
-
-
-def run_monte_carlo(base_assumptions, overrides=None, n_sims=750, seed=42):
-    """Lightweight simulation around the current dashboard assumptions.
-
-    This is intentionally simple and transparent. It perturbs the key commercial,
-    timing, cost, discount-rate, and phase-success assumptions, then reuses the
-    deterministic model for each draw.
-    """
-    rng = np.random.default_rng(seed)
-    base = clean_assumptions(base_assumptions)
-    overrides = overrides or {}
-    results = []
-
-    for _ in range(n_sims):
-        a = dict(base)
-        a["price_per_unit"] = max(0, rng.normal(base["price_per_unit"], base["price_per_unit"] * 0.20))
-        a["peak_penetration"] = float(np.clip(rng.normal(base["peak_penetration"], max(base["peak_penetration"] * 0.25, 0.5)), 0.01, 100))
-        a["target_patient_pct"] = float(np.clip(rng.normal(base["target_patient_pct"], max(base["target_patient_pct"] * 0.20, 0.5)), 0.01, 100))
-        a["cogs_pct"] = float(np.clip(rng.normal(base["cogs_pct"], max(base["cogs_pct"] * 0.20, 1.0)), 0.0, 95.0))
-        a["asset_discount_rate"] = float(np.clip(rng.normal(base["asset_discount_rate"], 1.5), 0.1, 50.0))
-        a["launch_year"] = int(base["launch_year"] + rng.choice([-1, 0, 1], p=[0.25, 0.50, 0.25]))
-
-        for key in ["phase_i_success", "phase_ii_success", "phase_iii_success", "approval_success"]:
-            a[key] = float(np.clip(rng.normal(base[key], 10.0), 1.0, 99.0))
-
-        model = build_dcf_model(a, overrides)
-        s = model["summary"]
-        results.append({
-            "rnpv": s["rnpv"],
-            "licensee_npv": s["licensee_npv"],
-            "licensor_npv": s["licensor_npv"],
-        })
-
-    return pd.DataFrame(results)
 
 
 def register_callbacks(app):
@@ -222,7 +188,7 @@ def register_callbacks(app):
                         pass
                 a[key] = val
 
-        a = clean_assumptions(a)
+        a = validate_simulation_assumptions(a)
         model = build_dcf_model(a, overrides)
         summary = model["summary"]
         rows = model["frame"]
@@ -233,19 +199,10 @@ def register_callbacks(app):
         style_cond = []
 
         for row_key in ["revenue", "gross_profit", "ebitda", "free_cash_flow", "rnpv", "licensee_enpv", "licensor_npv"]:
-            style_cond.append({
-                "if": {"filter_query": f"{{row_key}} = '{row_key}'"},
-                "backgroundColor": "#f8fafc",
-                "fontWeight": "800",
-            })
+            style_cond.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#f8fafc", "fontWeight": "800"})
 
         for row_key in ["section_market", "section_pl", "section_ptrs", "section_licensing", "section_valuation"]:
-            style_cond.append({
-                "if": {"filter_query": f"{{row_key}} = '{row_key}'"},
-                "backgroundColor": "#e8f0fe",
-                "fontWeight": "900",
-                "color": "#172033",
-            })
+            style_cond.append({"if": {"filter_query": f"{{row_key}} = '{row_key}'"}, "backgroundColor": "#e8f0fe", "fontWeight": "900", "color": "#172033"})
 
         style_cond.append({"if": {"column_id": "y0"}, "borderLeft": "2px solid #1f6feb"})
         override_status = f"{len(overrides)} manual override(s) applied" if overrides else ""
@@ -324,7 +281,7 @@ def register_callbacks(app):
         fig6.update_layout(template="plotly_white", height=280, title="Cumulative Discounted Licensee CF", margin=dict(t=30, b=20), legend=dict(orientation="h", y=1.06))
 
         try:
-            mc_df = run_monte_carlo(a, overrides)
+            mc_df = run_biotech_monte_carlo(a, overrides)
             rnpv = mc_df["rnpv"]
             mc_mean = _money(float(rnpv.mean()))
             mc_median = _money(float(rnpv.median()))
@@ -332,7 +289,7 @@ def register_callbacks(app):
             mc_prob_positive = f"{(rnpv.gt(0).mean() * 100):.1f}%"
             mc_fig = go.Figure()
             mc_fig.add_trace(go.Histogram(x=rnpv, nbinsx=40, name="rNPV", marker_color=COLORS["blue"], opacity=0.85))
-            mc_fig.add_vline(x=0, line_color="black", line_width=1)
+            mc_fig.add_vline(x=0, line_color="black", line_width=1, annotation_text="Break-even", annotation_position="top")
             mc_fig.update_layout(template="plotly_white", height=360, title="Monte Carlo rNPV Distribution ($M)", xaxis_title="rNPV ($M)", yaxis_title="Simulation Count", margin=dict(t=40, b=35))
         except Exception:
             mc_mean = mc_median = mc_p10_p90 = mc_prob_positive = "—"
@@ -358,15 +315,7 @@ def register_callbacks(app):
         fig7.add_vline(x=0, line_color="black", line_width=1.5)
         fig7.update_layout(template="plotly_white", height=400, title=f"Tornado — {metric_key.replace('_', ' ').title()}", xaxis_title="Δ NPV ($M)", margin=dict(l=160, t=40, b=30), barmode="relative", showlegend=False)
 
-        sens_table = [{
-            "Variable": row["variable"],
-            "Low": row["low_case"],
-            "Base": row["base_case"],
-            "High": row["high_case"],
-            "Δ Low": f"{row['delta_low']:.1f}",
-            "Δ High": f"{row['delta_high']:.1f}",
-            "Impact": f"{row['absolute_impact']:.1f}",
-        } for _, row in sens_df.iterrows()]
+        sens_table = [{"Variable": row["variable"], "Low": row["low_case"], "Base": row["base_case"], "High": row["high_case"], "Δ Low": f"{row['delta_low']:.1f}", "Δ High": f"{row['delta_high']:.1f}", "Impact": f"{row['absolute_impact']:.1f}"} for _, row in sens_df.iterrows()]
         sens_cols = [
             {"name": "Variable", "id": "Variable"},
             {"name": "Low Case", "id": "Low"},
