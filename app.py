@@ -29,10 +29,21 @@ def clean_float(value, fallback=0.0):
     return float(value)
 
 
+def clean_int(value, fallback=0, minimum=None, maximum=None):
+    result = int(round(clean_float(value, fallback)))
+    if minimum is not None:
+        result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+
 A = DEFAULT_ASSUMPTIONS
 RD_TOTAL = A["phase_i_rd"] + A["phase_ii_rd"] + A["phase_iii_rd"]
 
 INPUTS = [
+    ("start-year", "Start year", A["start_year"], 1),
+    ("forecast-years", "Forecast years", A["forecast_years"], 1),
     ("initial-population", "Initial population (M)", A["initial_population"], 1),
     ("population-growth", "Population growth (%)", A["population_growth"], 0.01),
     ("target-patient-pct", "Target patient %", A["target_patient_pct"], 0.5),
@@ -85,14 +96,15 @@ def metric_card(title, component_id, subtitle):
 
 def assumptions_card():
     groups = [
-        ("Market and costs", INPUTS[:12]),
-        ("Clinical success", INPUTS[12:16]),
-        ("Deal terms", INPUTS[16:23]),
-        ("Discount rates", INPUTS[23:]),
+        ("Model period", INPUTS[:2]),
+        ("Market and costs", INPUTS[2:14]),
+        ("Clinical success", INPUTS[14:18]),
+        ("Deal terms", INPUTS[18:25]),
+        ("Discount rates", INPUTS[25:]),
     ]
     children = [
         html.H5("1. Assumptions", className="fw-bold"),
-        html.Div("Edit inputs, then click Run / Calculate Model. The DCF table and Monte Carlo outputs update from the latest values when you click the button.", className="text-muted mb-3"),
+        html.Div("Edit inputs, then click Run / Calculate Model. Forecast years controls how many columns the DCF table shows, so the model can be reused for different companies or projects.", className="text-muted mb-3"),
     ]
     for title, items in groups:
         children += [html.H6(title, className="fw-bold mt-3"), dbc.Row([input_col(*item) for item in items])]
@@ -109,7 +121,7 @@ def assumptions_card():
 def dcf_table_card():
     return dbc.Card(dbc.CardBody([
         html.H5("2. Excel-style DCF table", className="fw-bold"),
-        html.Div("This table updates after you click Run / Calculate Model.", className="text-muted mb-3"),
+        html.Div("The table expands or shrinks based on Forecast Years after you click Run / Calculate Model.", className="text-muted mb-3"),
         dash_table.DataTable(
             id="dcf-table", columns=[], data=[], merge_duplicate_headers=True, page_action="none",
             style_table={"overflowX": "auto", "overflowY": "auto", "maxHeight": "650px", "width": "100%", "border": "1px solid #cbd5e1"},
@@ -141,7 +153,7 @@ app.layout = html.Div([
     dcc.Store(id="page-store", data="assumptions"),
     html.Div([
         html.H4("NPV Model", className="fw-bold mb-0"),
-        html.Div("Biotech licensing", className="text-white-50 mb-4"),
+        html.Div("Flexible licensing model", className="text-white-50 mb-4"),
         dbc.Nav([
             nav_link("1. Assumptions + DCF", "assumptions", True),
             nav_link("2. Asset rNPV", "asset"),
@@ -181,7 +193,10 @@ def collect_assumptions(values):
     vals = dict(zip(INPUT_IDS, values))
     a = dict(DEFAULT_ASSUMPTIONS)
     rd_total = clean_float(vals.get("rd-total"), RD_TOTAL)
+    forecast_years = clean_int(vals.get("forecast-years"), a["forecast_years"], minimum=1, maximum=40)
     a.update({
+        "start_year": clean_int(vals.get("start-year"), a["start_year"], minimum=1900, maximum=2200),
+        "forecast_years": forecast_years,
         "initial_population": clean_float(vals.get("initial-population"), a["initial_population"]),
         "population_growth": clean_float(vals.get("population-growth"), a["population_growth"]),
         "target_patient_pct": clean_float(vals.get("target-patient-pct"), a["target_patient_pct"]),
@@ -189,7 +204,7 @@ def collect_assumptions(values):
         "treatment_rate": clean_float(vals.get("treatment-rate"), a["treatment_rate"]),
         "peak_penetration": clean_float(vals.get("peak-penetration"), a["peak_penetration"]),
         "price_per_unit": clean_float(vals.get("price-per-unit"), a["price_per_unit"]),
-        "launch_year": int(clean_float(vals.get("launch-year"), a["launch_year"])),
+        "launch_year": clean_int(vals.get("launch-year"), a["launch_year"], minimum=1900, maximum=2200),
         "phase_i_rd": rd_total * 0.25,
         "phase_ii_rd": rd_total * 0.30,
         "phase_iii_rd": rd_total * 0.45,
@@ -212,7 +227,7 @@ def collect_assumptions(values):
         "licensor_discount_rate": clean_float(vals.get("licensor-rate"), a["licensor_discount_rate"]),
     })
     n_sims = max(10, min(int(clean_float(vals.get("n-sims"), 1000)), 10000))
-    return validate_simulation_assumptions(a), n_sims
+    return validate_simulation_assumptions(a), n_sims, forecast_years
 
 
 def dcf_columns(years):
@@ -255,7 +270,7 @@ def mc_table_and_chart(mc, col, title):
     *[State(component_id, "value") for component_id in INPUT_IDS],
 )
 def update_outputs(n_clicks, *values):
-    assumptions, n_sims = collect_assumptions(values)
+    assumptions, n_sims, forecast_years = collect_assumptions(values)
     model = build_dcf_model(assumptions, {})
     summary = model["summary"]
     seed = 42 + int(n_clicks or 0)
@@ -271,7 +286,7 @@ def update_outputs(n_clicks, *values):
     licensee_table, licensee_fig = mc_table_and_chart(mc, "licensee_npv", "Licensee eNPV")
     licensor_table, licensor_fig = mc_table_and_chart(mc, "licensor_npv", "Licensor NPV")
 
-    status = f"Calculated with {n_sims:,} Monte Carlo runs using the latest inputs. Seed #{seed}."
+    status = f"Calculated {forecast_years} forecast years with {n_sims:,} Monte Carlo runs using the latest inputs. Seed #{seed}."
     return (
         status,
         dcf_columns(model["years"]), dcf_data(model), dcf_styles,
