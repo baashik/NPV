@@ -1,0 +1,23 @@
+/* Improve wide DCF table readability by keeping row labels visible while scrolling. */
+
+#dcf-table .dash-spreadsheet-inner th:nth-child(1),
+#dcf-table .dash-spreadsheet-inner td:nth-child(1) {
+  position: sticky;
+  left: 0;
+  z-index: 3;
+  background: #fbfcfd;
+  box-shadow: 2px 0 4px rgba(16, 24, 40, 0.06);
+}
+
+#dcf-table .dash-spreadsheet-inner th:nth-child(2),
+#dcf-table .dash-spreadsheet-inner td:nth-child(2) {
+  position: sticky;
+  left: 270px;
+  z-index: 3;
+  background: #fbfcfd;
+  box-shadow: 2px 0 4px rgba(16, 24, 40, 0.04);
+}
+
+#dcf-table .dash-spreadsheet-inner th {
+  z-index: 4;
+}
