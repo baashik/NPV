@@ -1,23 +1,72 @@
-/* Improve wide DCF table readability by keeping row labels visible while scrolling. */
+/* Clean Excel-style DCF table layout. */
 
-#dcf-table .dash-spreadsheet-inner th:nth-child(1),
-#dcf-table .dash-spreadsheet-inner td:nth-child(1) {
+#dcf-table {
+  width: 100%;
+}
+
+#dcf-table .dash-spreadsheet-container,
+#dcf-table .dash-spreadsheet-inner {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+#dcf-table table {
+  border-collapse: collapse !important;
+  width: max-content !important;
+  min-width: 100% !important;
+}
+
+/* Hide the internal edit/pencil column. The live app table is output-only. */
+#dcf-table th[data-dash-column="edit"],
+#dcf-table td[data-dash-column="edit"] {
+  display: none !important;
+}
+
+/* Hide internal row key column if Dash renders it. */
+#dcf-table th[data-dash-column="row_key"],
+#dcf-table td[data-dash-column="row_key"] {
+  display: none !important;
+}
+
+#dcf-table th,
+#dcf-table td {
+  border: 1px solid #cbd5e1 !important;
+  height: 30px !important;
+  line-height: 18px !important;
+  vertical-align: middle !important;
+}
+
+#dcf-table th {
+  background: #e2e8f0 !important;
+  color: #111827 !important;
+  font-weight: 800 !important;
+  text-align: center !important;
+}
+
+#dcf-table td[data-dash-column="label"],
+#dcf-table th[data-dash-column="label"] {
   position: sticky;
   left: 0;
-  z-index: 3;
-  background: #fbfcfd;
-  box-shadow: 2px 0 4px rgba(16, 24, 40, 0.06);
+  z-index: 5;
+  background: #f8fafc !important;
+  color: #111827 !important;
+  text-align: left !important;
+  font-weight: 800 !important;
+  min-width: 260px !important;
+  width: 260px !important;
+  max-width: 260px !important;
+  box-shadow: 2px 0 4px rgba(15, 23, 42, 0.10);
 }
 
-#dcf-table .dash-spreadsheet-inner th:nth-child(2),
-#dcf-table .dash-spreadsheet-inner td:nth-child(2) {
-  position: sticky;
-  left: 270px;
-  z-index: 3;
-  background: #fbfcfd;
-  box-shadow: 2px 0 4px rgba(16, 24, 40, 0.04);
+#dcf-table tr:nth-child(even) td:not([data-dash-column="label"]) {
+  background: #f8fafc !important;
 }
 
-#dcf-table .dash-spreadsheet-inner th {
-  z-index: 4;
+#dcf-table tr:hover td {
+  background: #eff6ff !important;
+}
+
+/* Section rows */
+#dcf-table td:has(div:empty) {
+  min-height: 28px;
 }
