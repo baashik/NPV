@@ -30,16 +30,50 @@ The simulation is designed for biotech valuation rather than generic NPV analysi
 - Discount rates are varied within sensible bounds to avoid impossible outputs.
 - Inputs are validated before simulation so negative costs, impossible probabilities, and inverted royalty thresholds are corrected.
 
+## Advanced Valuation Helpers
+
+The repo includes standalone helper functions in `valuation_extensions.py` for:
+
+- Gordon Growth terminal value
+- Exit multiple terminal value
+- Black-Scholes-style expansion option value
+- Simple abandonment option value
+
+These are intentionally not wired into the main dashboard yet, because terminal value and real-options methodology should be reviewed before being included in investor-facing outputs.
+
+## Optional FastAPI Layer
+
+The Dash app remains the main product. An optional API is available for future Excel, backend, or integration workflows.
+
+Run locally:
+
+```bash
+uvicorn api:api --reload
+```
+
+Available endpoints:
+
+```text
+GET  /health
+POST /valuation
+POST /monte-carlo
+```
+
 ## Current File Structure
 
 ```text
-app.py              — Dash entry point. Creates the app, exposes server, and registers callbacks.
-callbacks.py        — Navigation, DCF updates, table overrides, sensitivity, charts, and Monte Carlo outputs.
-layout.py           — Dashboard layout, assumption panel, tabs, tables, cards, and charts.
-model_engine.py     — Deterministic DCF engine, licensor/licensee economics, formatting, and sensitivity logic.
-monte_carlo.py      — Biotech Monte Carlo engine, distributions, timing/cost correlation, and validation guardrails.
-styles.py           — Shared colours and layout styling.
-tests/              — Starter pytest coverage for royalty, DCF, validation, and Monte Carlo outputs.
+app.py                         — Dash entry point. Creates the app, exposes server, and registers callbacks.
+api.py                         — Optional FastAPI layer for valuation and Monte Carlo calls.
+callbacks.py                   — Navigation, DCF updates, table overrides, sensitivity, charts, and Monte Carlo outputs.
+layout.py                      — Dashboard layout, assumption panel, tabs, tables, cards, and charts.
+model_engine.py                — Deterministic DCF engine, licensor/licensee economics, formatting, and sensitivity logic.
+monte_carlo.py                 — Biotech Monte Carlo engine, distributions, timing/cost correlation, and validation guardrails.
+valuation_extensions.py        — Standalone terminal value and real-options helper logic.
+styles.py                      — Shared colours and layout styling.
+docs/METHODOLOGY.md            — Methodology explanation for financial reviewers.
+tests/                         — Starter pytest coverage for royalty, DCF, validation, Monte Carlo, and valuation helpers.
+.github/workflows/ci.yml       — GitHub Actions workflow running pytest on push and pull requests.
+.devcontainer/devcontainer.json — Codespaces / devcontainer setup.
 requirements.txt
 Dockerfile
 ```
@@ -69,6 +103,14 @@ pytest
 
 These tests are not a replacement for Excel benchmark reconciliation, but they provide a first layer of protection as the model develops.
 
+## Methodology
+
+See:
+
+```text
+docs/METHODOLOGY.md
+```
+
 ## Screenshot / GIF
 
 Add a dashboard screenshot or short GIF here once the app is running. Suggested path:
@@ -87,6 +129,8 @@ Then reference it in this README with:
 
 - Dash
 - Dash Bootstrap Components
+- FastAPI
+- Pydantic
 - NumPy
 - Pandas
 - Plotly
